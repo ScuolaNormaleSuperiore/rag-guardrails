@@ -58,12 +58,12 @@ The combined logic is `OR`: one positive detector is enough to block.
 
 The guard adds these admin settings:
 
-- `Security guard: block explicit prompt injection patterns`
+- `Security guard: block prompt injection patterns`
 - `Security guard: block prompt injection with local classifier`
 - `Security guard: prompt injection classifier model`
 - `Security guard: prompt injection classifier threshold`
 - `Security guard: Hugging Face token`
-- `Security guard: reply — prompt injection detected`
+- `Security guard: prompt injection reply`
 
 The threshold is the minimum confidence required for the classifier to block a
 message. Example:
@@ -300,4 +300,3 @@ This first version is intentionally narrow.
   prompt injection through retrieved documents.
 - Different thresholds per model, GPU selection, and structured telemetry are
   outside the scope of v1.
-

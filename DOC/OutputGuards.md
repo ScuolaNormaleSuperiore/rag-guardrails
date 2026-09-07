@@ -93,12 +93,12 @@ conversation history as the final outgoing message.
 
 The current output-side settings are:
 
-- `Output privacy guard: block e-mail addresses`
-- `Output privacy guard: block codice fiscale`
+- `Output privacy guard: block e-mail`
+- `Output privacy guard: block fiscal code`
 - `Output privacy guard: block IBAN`
 - `Output privacy guard: block phone numbers`
-- `Output privacy guard: region for phone numbers written without a prefix`
-- `Output privacy guard: reply — outgoing personal data detected`
+- `Output privacy guard: phone numbers region`
+- `Output privacy guard: personal data detected reply`
 
 The output-side guard is active whenever at least one of those output detectors
 is enabled.
@@ -106,16 +106,16 @@ is enabled.
 One setting is shared with the input stage rather than duplicated, for the
 reason given above:
 
-- `Privacy guards: public service contacts (not treated as personal data)`
+- `Privacy guards: allowed contacts`
 
 The corresponding input-side privacy settings are independent:
 
-- `Input privacy guard: block e-mail addresses`
-- `Input privacy guard: block codice fiscale`
+- `Input privacy guard: block e-mail`
+- `Input privacy guard: block fiscal code`
 - `Input privacy guard: block IBAN`
 - `Input privacy guard: block phone numbers`
-- `Input privacy guard: region for phone numbers written without a prefix`
-- `Input privacy guard: reply — personal data detected`
+- `Input privacy guard: phone numbers region`
+- `Privacy guard: personal data detected reply`
 
 ## Logging
 

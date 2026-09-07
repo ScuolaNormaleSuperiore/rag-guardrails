@@ -177,7 +177,7 @@ When adding a new guard:
 
 Examples:
 
-- a future output PII leak guard:
+- the current output PII leak guard:
   - `stage='output'`
   - `category='privacy'`
   - `verdict='output_personal_data'`

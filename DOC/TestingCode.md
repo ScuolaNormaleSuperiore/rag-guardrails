@@ -130,7 +130,7 @@ never taken.
 
 Suggested procedure:
 
-1. Enable `Tone guard: block offensive incoming messages with local classifier`
+1. Enable `Tone guard: block offensive incoming messages`
    in the panel and save.
 2. Confirm the `guards active` line moves from `tone(disabled)` to
    `tone(classifier IMSyPP/hate_speech_multilingual@0.60)`. That line proves the
@@ -155,8 +155,8 @@ exercises the new `before_cat_sends_message` path rather than the input-side
 
 Suggested procedure:
 
-1. Ensure the relevant output detector is enabled in the admin panel, for example `Output privacy guard: block e-mail addresses`.
-2. If you want to test the output path in isolation, disable the corresponding input detector first, for example `Input privacy guard: block e-mail addresses`, so the turn is not stopped on `fast_reply`.
+1. Ensure the relevant output detector is enabled in the admin panel, for example `Output privacy guard: block e-mail`.
+2. If you want to test the output path in isolation, disable the corresponding input detector first, for example `Input privacy guard: block e-mail`, so the turn is not stopped on `fast_reply`.
 3. Ask a benign help-desk question that is likely to make the model echo personal data in the answer, for example by explicitly requesting a reply that repeats an e-mail address or a phone number.
 4. Confirm that the user does **not** receive the generated answer containing the data, but the configured static output-side fallback instead.
 5. Confirm in `docker compose logs -f cheshire-cat-core` that the block line is the output-side one:

@@ -110,37 +110,37 @@ Settings are named after the guard family they belong to, so related options
 read together in the form:
 
 - `Help Desk e-mail`
-- `Privacy guards: public service contacts (not treated as personal data)`
-- `Limits guard: maximum message length (characters)`
-- `Limits guard: reply — message too long`
-- `Input privacy guard: block e-mail addresses`
-- `Input privacy guard: block codice fiscale`
+- `Privacy guards: allowed contacts`
+- `Limits guard: max message chars`
+- `Limits guard: max chars number exceeded message`
+- `Input privacy guard: block e-mail`
+- `Input privacy guard: block fiscal code`
 - `Input privacy guard: block IBAN`
 - `Input privacy guard: block phone numbers`
-- `Input privacy guard: region for phone numbers written without a prefix`
-- `Input privacy guard: reply — personal data detected`
-- `Output privacy guard: block e-mail addresses`
-- `Output privacy guard: block codice fiscale`
+- `Input privacy guard: phone numbers region`
+- `Privacy guard: personal data detected reply`
+- `Output privacy guard: block e-mail`
+- `Output privacy guard: block fiscal code`
 - `Output privacy guard: block IBAN`
 - `Output privacy guard: block phone numbers`
-- `Output privacy guard: region for phone numbers written without a prefix`
-- `Output privacy guard: reply — outgoing personal data detected`
-- `Security guard: block explicit prompt injection patterns`
+- `Output privacy guard: phone numbers region`
+- `Output privacy guard: personal data detected reply`
+- `Security guard: block prompt injection patterns`
 - `Security guard: block prompt injection with local classifier`
 - `Security guard: prompt injection classifier model`
 - `Security guard: prompt injection classifier threshold`
 - `Security guard: Hugging Face token`
-- `Security guard: reply — prompt injection detected`
-- `Tone guard: block offensive incoming messages with local classifier`
+- `Security guard: prompt injection reply`
+- `Tone guard: block offensive incoming messages`
 - `Tone guard: offensive input classifier model`
 - `Tone guard: offensive input classifier threshold`
-- `Tone guard: reply — offensive content detected`
+- `Tone guard: offensive content reply`
 
 Two settings ship **switched off**:
 `Security guard: block prompt injection with local classifier`, so a first
 installation does not depend on a model download or on access to a gated
-repository; and `Tone guard: block offensive incoming messages with local
-classifier`, because it loads a second model into memory and adds one inference
+repository; and `Tone guard: block offensive incoming messages`, because it
+loads a second model into memory and adds one inference
 to every message that reaches it, and its precision on real help-desk traffic
 still has to be measured. Everything else ships enabled.
 
@@ -149,7 +149,7 @@ for real deployments.
 
 ### If the Rate Limiter plugin is also installed
 
-Keep `Limits guard: maximum message length` **below** Rate Limiter's own
+Keep `Limits guard: max message chars` **below** Rate Limiter's own
 `max_prompt_length`. The two guards overlap, and the order in which they run
 decides more than which text the user sees.
 
@@ -346,4 +346,3 @@ no code change.
 ### Runtime dependencies
 
 Declared in `requirements.txt`, all GPL-compatible: `phonenumberslite` (Apache-2.0), `transformers` (Apache-2.0), `torch` (BSD-3-Clause).
-

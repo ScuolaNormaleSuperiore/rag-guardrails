@@ -79,8 +79,8 @@ diagnosing a specific request:
 [rag-guardrails] input allowed, stage='input', checks=length+injection_patterns+personal_data+injection_classifier, latency_ms=0.03
 ```
 
-One exception currently remains at `INFO`: while the prompt-injection
-classifier is being evaluated, pipeline reuse is still logged at that level.
+One exception currently remains at `INFO`: while the local classifiers are
+being evaluated, pipeline reuse is still logged at that level for either one.
 
 ## Logging boundaries
 
