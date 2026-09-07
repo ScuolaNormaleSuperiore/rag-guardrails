@@ -221,7 +221,7 @@ Two consequences worth knowing:
   the `guards active` announcement is built from the settings, so it claims a
   classifier that turns out not to run.
 
-While a model is unavailable, the `DEBUG` line of an allowed message stops listing
+While a model is unavailable, the `INFO` line of an allowed message stops listing
 `injection_classifier` among the checks that covered the turn. A check that cannot
 run must not appear as coverage.
 
@@ -245,11 +245,11 @@ model and threshold in use; with both mechanisms off it becomes a `WARNING`
 naming `security` as uncovered. This matters because a disabled guard is
 otherwise indistinguishable, in the log, from a guard that finds nothing.
 
-A message that passes writes no verdict line. At `DEBUG` it writes one line
+A message that passes writes no verdict line. At `INFO` it writes one line
 listing the checks that covered the turn — `injection_patterns`,
-`injection_classifier` — and the latency. At the default `INFO` level the guards
-themselves stay silent; the pipeline-reuse line described below is the one
-exception, and it is deliberate for v1.
+`injection_classifier` — and the latency. This makes the guard path visible while
+the core stays at its default `INFO` level. Pipeline reuse is logged at the same
+level while the classifier feature is being evaluated.
 
 When a block happens, the logs identify at least:
 

@@ -93,27 +93,34 @@ a live session conclusive, and it is the reference for every manual check below.
 
 | What handled the turn | What the log shows | Level |
 | --- | --- | --- |
+| The plugin was activated | `plugin activated, guardrails registered: fast_reply(priority=-1) …, before_cat_sends_message …` | `INFO` |
 | An input guard refused | `input blocked, stage='input', category=…, verdict=…` followed by `no retrieval, no generation, nothing stored in memory` | `INFO` |
 | The output guard replaced the answer | `output blocked, stage='output', category='privacy', verdict='output_personal_data'` followed by `generated reply replaced before delivery` | `INFO` |
-| Everything passed, normal answer | **nothing** from this plugin at `INFO`; one line naming the checks that covered the turn at `DEBUG` | `DEBUG` |
+| Everything passed, normal answer | `input allowed` **and** `output allowed`, each naming the checks that covered its stage | `INFO` |
+| The answer was delivered with the output stage switched off | `output allowed, stage='output', checks=none` | `INFO` |
 | A classifier could not run, message let through | `classifier unavailable (…), continuing without blocking` — **once**, not per message | `WARNING` |
 | Another plugin refused it | **nothing** from this plugin: its checks passed and it returned the reply it received untouched | — |
-| The configuration changed | `guards active: …`, once per change, `WARNING` instead of `INFO` when a category that ships enabled has been switched off | `INFO`/`WARNING` |
+| The configuration changed | `guards active: …`, once per change, `WARNING` instead of `INFO` when a stage that ships enabled has been switched off | `INFO`/`WARNING` |
 
 Two readings of this table are worth stating, because they are what makes it
 useful rather than decorative.
 
-**Silence at `INFO` is a result, not an absence.** A turn that produces no line
-from this plugin is a turn every guard allowed. Distinguishing «allowed» from «the
-plugin is not running» is what the `guards active` announcement is for, and it is
-why that line exists at all.
+**Every turn has an operational trace at `INFO`, at each stage it reached.**
+`input allowed` proves the plugin handled a passing message and `input blocked`
+that a guard stopped it; `output allowed` and `output blocked` say the same for
+the generated answer. A turn refused on `fast_reply` therefore has an `input`
+line and no `output` line at all, which is how an early refusal is told apart
+from an answer that passed the output stage. The separate `guards active`
+announcement records the configuration on the first turn and whenever it changes,
+and `plugin activated` proves the hooks were registered in the first place.
 
-**A model-produced fallback leaves no trace here.** When the answer is the
+**A model-produced fallback leaves no dedicated output trace here.** When the answer is the
 insufficiency message the prompt asks for — «la risposta non è reperibile nei
 contenuti disponibili» — no plugin line is written, because no plugin was
-involved: the model obeyed an instruction. Such a turn is indistinguishable in the
-log from a normal answer, which is precisely why *how often the recall comes back
-empty* is an open issue and not something the log already answers.
+involved in choosing that output: the model obeyed an instruction. Its preceding
+`input allowed` line is indistinguishable from the one before a normal answer,
+which is precisely why *how often the recall comes back empty* is an open issue
+and not something the log already answers.
 
 ### Manual check still outstanding: the tone guard
 
@@ -141,7 +148,8 @@ Suggested procedure:
 4. Send `Questa maledetta VPN non funziona mai`. Expect a normal answer: an
    exasperated user must not be refused. This is the false-positive case the
    threshold was chosen for.
-5. Send a legitimate help-desk question and confirm nothing is logged at `INFO` beyond
+5. Send a legitimate help-desk question and confirm the only `INFO` lines are
+   `input allowed` with `offensive_input` among its checks, `output allowed`, and
    the classifier cache-hit line.
 
 The first message after enabling also pays the model load, so expect it to be

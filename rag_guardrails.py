@@ -45,7 +45,7 @@ import os
 import time
 
 from cat.log import log
-from cat.mad_hatter.decorators import hook
+from cat.mad_hatter.decorators import hook, plugin
 from pydantic import ValidationError
 
 # The Cat imports plugin files as `cat.plugins.<folder>.<module>`, which makes
@@ -58,6 +58,7 @@ try:
         CATEGORY_SECURITY,
         CATEGORY_TONE,
         STAGE_INPUT,
+        STAGE_OUTPUT,
         VERDICT_MESSAGE_LENGTH,
         VERDICT_OFFENSIVE_INPUT,
         VERDICT_OUTPUT_PERSONAL_DATA,
@@ -84,6 +85,7 @@ except ImportError:  # pragma: no cover - depends on how the module is loaded
         CATEGORY_SECURITY,
         CATEGORY_TONE,
         STAGE_INPUT,
+        STAGE_OUTPUT,
         VERDICT_MESSAGE_LENGTH,
         VERDICT_OFFENSIVE_INPUT,
         VERDICT_OUTPUT_PERSONAL_DATA,
@@ -187,7 +189,7 @@ def load_settings(cat) -> RagGuardrailsSettings:
     try:
         stored = cat.mad_hatter.get_plugin().load_settings()
     except Exception as error:
-        log.debug(
+        log.info(
             f"[rag-guardrails] settings unavailable ({error}), using defaults"
         )
         return RagGuardrailsSettings()
@@ -308,9 +310,13 @@ def active_guards_summary(
         if input_detectors:
             parts.append(f"input={'+'.join(input_detectors)}")
             parts.append(f"input_region={settings.input_phone_region}")
+        else:
+            parts.append("input=disabled")
         if output_checks:
             parts.append(f"output={'+'.join(output_checks)}")
             parts.append(f"output_region={settings.output_phone_region}")
+        else:
+            parts.append("output=disabled")
         privacy = f"{CATEGORY_PRIVACY}({', '.join(parts)})"
     else:
         privacy = f"{CATEGORY_PRIVACY}(disabled)"
@@ -337,16 +343,44 @@ def active_guards_summary(
     else:
         tone = f"{CATEGORY_TONE}(disabled)"
 
-    uncovered = tuple(
-        category
-        for category, description in (
-            (CATEGORY_LIMITS, limits),
-            (CATEGORY_PRIVACY, privacy),
-            (CATEGORY_SECURITY, security),
-            (CATEGORY_TONE, tone),
+    # Coverage is decided per stage+category pair, not per category, because the
+    # two axes are orthogonal: `privacy` carries a verdict on `input` and another
+    # on `output`, and switching off one stage leaves the other one working. A
+    # single per-category flag reported an instance as covered while its whole
+    # output stage was off, and the only hint was the absence of the `output=`
+    # fragment from a line nobody reads that closely.
+    #
+    # The flag is carried explicitly rather than derived from the description.
+    # `description.endswith("(disabled)")` decided the severity of this
+    # announcement by pattern-matching text written for a human, so a phone
+    # region or a model name ending in that word would have changed it.
+    #
+    # Both privacy stages collapse back into one entry when neither is on, so the
+    # common «privacy is off» case still reads as `privacy` rather than as two
+    # near-identical items.
+    if input_detectors or output_checks:
+        privacy_coverage = (
+            (f"{CATEGORY_PRIVACY}(input)", CATEGORY_PRIVACY, bool(input_detectors)),
+            (f"{CATEGORY_PRIVACY}(output)", CATEGORY_PRIVACY, bool(output_checks)),
         )
-        if description.endswith("(disabled)")
-        and category in CATEGORIES_ENABLED_BY_DEFAULT
+    else:
+        privacy_coverage = ((CATEGORY_PRIVACY, CATEGORY_PRIVACY, False),)
+
+    coverage = (
+        (CATEGORY_LIMITS, CATEGORY_LIMITS, settings.max_message_chars > 0),
+        *privacy_coverage,
+        (CATEGORY_SECURITY, CATEGORY_SECURITY, bool(mechanisms)),
+        (
+            CATEGORY_TONE,
+            CATEGORY_TONE,
+            settings.detect_offensive_input_classifier,
+        ),
+    )
+
+    uncovered = tuple(
+        label
+        for label, category, covered in coverage
+        if not covered and category in CATEGORIES_ENABLED_BY_DEFAULT
     )
 
     return f"{limits}, {privacy}, {security}, {tone}", uncovered
@@ -379,6 +413,30 @@ def announce_active_guards(settings: RagGuardrailsSettings) -> None:
         log.info(f"[rag-guardrails] guards active: {summary}")
 
     _ANNOUNCED_GUARD_SUMMARY = summary
+
+
+def log_output_allowed(
+    enabled_detectors: tuple[str, ...], started: float
+) -> None:
+    """Record that the output stage ran and let the answer through.
+
+    The counterpart of the `input allowed` line, and it exists for the same
+    reason: silence from a guard is indistinguishable from a guard that is not
+    running. On the output stage that ambiguity was worse than on input, because
+    three different situations produced no line at all — a clean answer, a turn
+    refused earlier that never reached generation, and every output detector
+    switched off.
+
+    `checks` names the detectors that actually examined the answer, so an empty
+    set prints `none` instead of implying a check that did not happen. The
+    generated answer is never included, exactly as on the input side.
+    """
+    log.info(
+        f"[rag-guardrails] output allowed, "
+        f"stage='{STAGE_OUTPUT}', "
+        f"checks={'+'.join(enabled_detectors) or 'none'}, "
+        f"latency_ms={(time.perf_counter() - started) * 1000:.2f}"
+    )
 
 
 def blocked_detail(
@@ -695,15 +753,14 @@ def guard_input_message(fast_reply, cat):
     elapsed_ms = (time.perf_counter() - started) * 1000
 
     if verdict is None:
-        # DEBUG, not INFO: one line per message would be noise on every normal
-        # conversation, and the announcement above already proves the guards are
-        # running. This is for diagnosing one specific message, where `checks=`
-        # is the answer to whether the turn was covered and by what.
+        # INFO deliberately: operators can keep the core at its normal INFO level
+        # and still see that this plugin handled the turn and which checks covered
+        # it. The message text itself is never included.
         # Two decimals, not one: the deterministic checks cost hundredths of a
         # millisecond, and `latency_ms=0.0` reads as a broken timer rather than
         # as a fast path. The classifier, when it runs, is three orders of
         # magnitude above that and stays readable either way.
-        log.debug(
+        log.info(
             f"[rag-guardrails] input allowed, "
             f"stage='{STAGE_INPUT}', "
             f"checks={'+'.join(enabled_check_names(settings)) or 'none'}, "
@@ -746,7 +803,14 @@ def guard_output_message(message, cat):
     started = time.perf_counter()
 
     settings = load_settings(cat)
-    if not output_privacy_checks_enabled(settings):
+    enabled = output_privacy_checks_enabled(settings)
+    if not enabled:
+        # Logged, then returned: the detectors are skipped but the turn still
+        # leaves a trace at this stage. Without it, «no output line» meant three
+        # different things at once — the answer was clean, the turn never reached
+        # generation, or every output detector was switched off — and the reader
+        # had no way to tell them apart. `checks=none` names the third.
+        log_output_allowed(enabled, started)
         return message
 
     text = extract_text(message)
@@ -761,6 +825,7 @@ def guard_output_message(message, cat):
         public_contacts=parse_public_contacts(settings.public_service_contacts),
     )
     if verdict is None:
+        log_output_allowed(enabled, started)
         return message
 
     reply = reply_for(verdict, settings)
@@ -779,3 +844,34 @@ def guard_output_message(message, cat):
     )
     return replace_message_text(message, reply)
 
+
+
+@plugin
+def activated(plugin):
+    """Announce that the plugin loaded and which hooks it registered.
+
+    The one thing no per-turn line can report: a plugin that fails to load
+    registers no hooks, so every other line in this module is silent too, and
+    silence is exactly what a broken activation and a quiet conversation have in
+    common. This line turns «the guardrails are running» into a positive fact
+    stated at a known moment.
+
+    `activated` rather than `after_cat_bootstrap`, deliberately, and the two are
+    not interchangeable: `after_cat_bootstrap` runs once when the core starts
+    (`cat/looking_glass/cheshire_cat.py:106`), so it says nothing about a plugin
+    switched on later from the admin panel — which is the case where a load
+    failure actually happens, because that is when the code on disk is re-read.
+    This override runs on every activation, toggles included
+    (`cat/mad_hatter/plugin.py:90`).
+
+    The guard configuration is deliberately *not* announced here. It belongs to
+    `guards active`, which is driven by the settings and re-announced whenever
+    they change; duplicating it at activation would report a configuration that
+    can be edited a moment later, and would need `settings.json` to exist
+    already.
+    """
+    log.info(
+        "[rag-guardrails] plugin activated, guardrails registered: "
+        f"fast_reply(priority={INPUT_GUARD_PRIORITY}) for the input stage, "
+        "before_cat_sends_message for the output stage"
+    )

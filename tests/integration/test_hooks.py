@@ -14,10 +14,9 @@ the last non-None return wins, so this plugin must stay below the other plugins
 to have its reply delivered. A priority raised above 1 by mistake would silently
 hand over control to `Rate Limiter`, with no error anywhere.
 
-The announcement of the active guards: on a message that passes, the plugin
-writes nothing at `INFO`, and that silence is indistinguishable from the plugin
-not running. Losing the announcement would make an unguarded instance look
-exactly like a guarded one.
+The announcement of the active guards records the configuration independently
+from the per-turn `input allowed` line. Losing it would hide which categories
+are configured and whether one is completely uncovered.
 """
 
 import sys
@@ -656,7 +655,6 @@ class TestPromptInjectionGuard:
         cat = make_cat(
             {
                 "detect_prompt_injection_custom": False,
-                "detect_prompt_injection_classifier": True,
                 "detect_prompt_injection_classifier": False,
             }
         )
@@ -850,21 +848,30 @@ class TestConfiguration:
             checks.DEFAULT_MAX_MESSAGE_CHARS
         )
 
-    def test_unavailable_settings_fall_back_to_the_shipped_help_desk_address(self):
+    def test_unavailable_settings_fall_back_and_are_logged_at_info(
+        self, monkeypatch
+    ):
+        infos, debugs = [], []
+        monkeypatch.setattr(guards.log, "info", infos.append)
+        monkeypatch.setattr(guards.log, "debug", debugs.append)
+
         assert (
             guards.load_settings(make_cat()).help_desk_email
             == settings_module.DEFAULT_HELP_DESK_EMAIL
             == "helpdesk@example.org"
         )
+        assert any("settings unavailable" in line for line in infos)
+        assert not [line for line in debugs if "settings unavailable" in line]
 
 
 class TestGuardAnnouncement:
     """What proves the guards are running when nothing trips.
 
-    On a message that passes, the plugin writes nothing at `INFO`, and that
-    silence is indistinguishable from the plugin not being active at all. This
-    announcement is what tells the two apart, so its absence is a real defect
-    even though nothing breaks.
+    A passing message now writes its own `input allowed` line, so this
+    announcement no longer carries that job alone. What it still answers, and
+    nothing else does, is *what the configuration is*: which detectors are on,
+    which model and threshold a classifier uses, and above all which stage of
+    which category is left with no guard at all.
     """
 
     @pytest.fixture(autouse=True)
@@ -967,7 +974,6 @@ class TestGuardAnnouncement:
             (
                 {
                     "detect_prompt_injection_custom": False,
-                "detect_prompt_injection_classifier": True,
                     "detect_prompt_injection_classifier": False,
                 },
                 "security",
@@ -995,6 +1001,103 @@ class TestGuardAnnouncement:
 
         assert any("guards active:" in line for line in infos)
         assert not [line for line in warnings if "guards active:" in line]
+
+    @pytest.mark.parametrize(
+        "stored, uncovered, still_covered",
+        [
+            (
+                {
+                    "detect_output_email": False,
+                    "detect_output_codice_fiscale": False,
+                    "detect_output_iban": False,
+                    "detect_output_phone": False,
+                },
+                "privacy(output)",
+                "privacy(input)",
+            ),
+            (
+                {
+                    "detect_input_email": False,
+                    "detect_input_codice_fiscale": False,
+                    "detect_input_iban": False,
+                    "detect_input_phone": False,
+                },
+                "privacy(input)",
+                "privacy(output)",
+            ),
+        ],
+    )
+    def test_one_privacy_stage_left_uncovered_is_still_a_warning(
+        self, monkeypatch, stored, uncovered, still_covered
+    ):
+        # The gap this replaced: coverage was decided per category, so an
+        # instance with all four *output* detectors off was reported as covered
+        # because the input ones were on. Privacy carries a verdict on each
+        # stage, and switching off one leaves a real hole that nothing announced.
+        warnings = []
+        monkeypatch.setattr(guards.log, "warning", warnings.append)
+
+        send(make_cat(stored), "Come attivo la VPN?")
+
+        line = next(line for line in warnings if "no guard covers:" in line)
+        assert uncovered in line
+        assert still_covered not in line.split("no guard covers:")[1]
+
+    def test_both_privacy_stages_off_are_reported_as_one_item(self, monkeypatch):
+        # The common case stays readable: «privacy is off» is one item, not two
+        # near-identical ones, and the wording does not change from what
+        # operators already grep for.
+        warnings = []
+        monkeypatch.setattr(guards.log, "warning", warnings.append)
+
+        send(
+            make_cat(
+                {
+                    "detect_input_email": False,
+                    "detect_input_codice_fiscale": False,
+                    "detect_input_iban": False,
+                    "detect_input_phone": False,
+                    "detect_output_email": False,
+                    "detect_output_codice_fiscale": False,
+                    "detect_output_iban": False,
+                    "detect_output_phone": False,
+                }
+            ),
+            "Come attivo la VPN?",
+        )
+
+        covers = next(
+            line for line in warnings if "no guard covers:" in line
+        ).split("no guard covers:")[1]
+        assert "privacy" in covers
+        assert "privacy(input)" not in covers
+        assert "privacy(output)" not in covers
+
+    def test_the_summary_names_a_disabled_stage_explicitly(self):
+        # Reading the line must not require knowing which fragment *should* have
+        # been there: the absence of `output=` was the only previous signal.
+        settings = settings_module.RagGuardrailsSettings(
+            detect_output_email=False,
+            detect_output_codice_fiscale=False,
+            detect_output_iban=False,
+            detect_output_phone=False,
+        )
+
+        summary, uncovered = guards.active_guards_summary(settings)
+
+        assert "output=disabled" in summary
+        assert "privacy(output)" in uncovered
+
+    def test_coverage_does_not_depend_on_the_wording_of_the_summary(self):
+        # It used to: `description.endswith("(disabled)")` decided the severity
+        # of the whole announcement by pattern-matching text written for a human.
+        # The flag is now carried separately, so a description may say anything.
+        settings = settings_module.RagGuardrailsSettings()
+
+        summary, uncovered = guards.active_guards_summary(settings)
+
+        assert f"{checks.CATEGORY_TONE}(disabled)" in summary
+        assert uncovered == ()
 
     def test_the_summary_reports_the_classifier_model_and_threshold(self):
         # Enabled explicitly: the prompt-injection classifier ships disabled, like
@@ -1136,7 +1239,7 @@ class TestClassifierUnavailable:
 
 
 class TestAllowedPathLogging:
-    def test_a_passing_message_is_logged_at_debug_not_info(self, monkeypatch):
+    def test_a_passing_message_is_logged_at_info(self, monkeypatch):
         cat = make_cat()
         infos, debugs = [], []
         monkeypatch.setattr(guards.log, "info", infos.append)
@@ -1149,9 +1252,9 @@ class TestAllowedPathLogging:
 
         send(cat, "How do I activate the VPN?")
 
-        assert any("input allowed" in line for line in debugs)
-        assert any(f"stage='{checks.STAGE_INPUT}'" in line for line in debugs)
-        assert not [line for line in infos if "input allowed" in line]
+        assert any("input allowed" in line for line in infos)
+        assert any(f"stage='{checks.STAGE_INPUT}'" in line for line in infos)
+        assert not [line for line in debugs if "input allowed" in line]
 
     def test_the_allowed_line_names_the_checks_that_covered_the_turn(
         self, monkeypatch
@@ -1163,8 +1266,8 @@ class TestAllowedPathLogging:
                 "detect_prompt_injection_classifier": True,
             }
         )
-        debugs = []
-        monkeypatch.setattr(guards.log, "debug", debugs.append)
+        infos = []
+        monkeypatch.setattr(guards.log, "info", infos.append)
         monkeypatch.setattr(
             guards,
             "classify_prompt_injection",
@@ -1173,7 +1276,7 @@ class TestAllowedPathLogging:
 
         send(cat, "How do I activate the VPN?")
 
-        line = next(line for line in debugs if "input allowed" in line)
+        line = next(line for line in infos if "input allowed" in line)
         assert f"stage='{checks.STAGE_INPUT}'" in line
         assert "checks=length+injection_patterns+personal_data" in line
         assert "injection_classifier" in line
@@ -1190,21 +1293,20 @@ class TestAllowedPathLogging:
                 "detect_input_iban": False,
                 "detect_input_phone": False,
                 "detect_prompt_injection_custom": False,
-                "detect_prompt_injection_classifier": True,
                 "detect_prompt_injection_classifier": False,
             }
         )
-        debugs = []
-        monkeypatch.setattr(guards.log, "debug", debugs.append)
+        infos = []
+        monkeypatch.setattr(guards.log, "info", infos.append)
 
         send(cat, "How do I activate the VPN?")
 
-        assert any("checks=none" in line for line in debugs)
+        assert any("checks=none" in line for line in infos)
 
     def test_the_allowed_line_never_carries_the_message(self, monkeypatch):
         cat = make_cat()
-        debugs = []
-        monkeypatch.setattr(guards.log, "debug", debugs.append)
+        infos = []
+        monkeypatch.setattr(guards.log, "info", infos.append)
         monkeypatch.setattr(
             guards,
             "classify_prompt_injection",
@@ -1213,7 +1315,7 @@ class TestAllowedPathLogging:
 
         send(cat, "il mio problema riservato con la stampante di reparto")
 
-        assert all("stampante di reparto" not in line for line in debugs)
+        assert all("stampante di reparto" not in line for line in infos)
 
     def test_the_blocked_line_reports_latency_too(self, monkeypatch):
         # So the two paths are comparable when measuring the guard's cost.
@@ -1238,6 +1340,112 @@ class TestAllowedPathLogging:
         assert "injection_classifier" not in names
         assert "injection_patterns" in names
         assert "personal_data" in names
+
+
+class TestOutputAllowedPathLogging:
+    """The output stage has to leave a trace on the turns it does not block.
+
+    Before this line existed, three unrelated situations all produced no output
+    line at all: a clean answer, a turn refused on `fast_reply` that never
+    reached generation, and an output stage with every detector switched off.
+    An operator reading the log could not tell which had happened, which is the
+    same ambiguity `input allowed` was added to remove on the input side.
+    """
+
+    def test_a_clean_answer_is_logged_at_info(self, monkeypatch):
+        cat = make_cat()
+        infos, debugs = [], []
+        monkeypatch.setattr(guards.log, "info", infos.append)
+        monkeypatch.setattr(guards.log, "debug", debugs.append)
+
+        deliver(cat, "Come attivo la VPN dal portatile aziendale?")
+
+        assert any("output allowed" in line for line in infos)
+        assert any(f"stage='{checks.STAGE_OUTPUT}'" in line for line in infos)
+        assert not [line for line in debugs if "output allowed" in line]
+
+    def test_the_line_names_the_detectors_that_examined_the_answer(
+        self, monkeypatch
+    ):
+        cat = make_cat({"detect_output_iban": False})
+        infos = []
+        monkeypatch.setattr(guards.log, "info", infos.append)
+
+        deliver(cat, "Come attivo la VPN?")
+
+        line = next(line for line in infos if "output allowed" in line)
+        assert "checks=email+codice_fiscale+phone" in line
+        assert "iban" not in line
+        assert "latency_ms=" in line
+
+    def test_an_unguarded_output_stage_says_so(self, monkeypatch):
+        # The case that used to be invisible: all four detectors off, so the
+        # answer is delivered unchecked. `checks=none` names that, where the
+        # early return used to leave no line at all.
+        cat = make_cat(
+            {
+                "detect_output_email": False,
+                "detect_output_codice_fiscale": False,
+                "detect_output_iban": False,
+                "detect_output_phone": False,
+            }
+        )
+        infos = []
+        monkeypatch.setattr(guards.log, "info", infos.append)
+
+        deliver(cat, "Come attivo la VPN?")
+
+        line = next(line for line in infos if "output allowed" in line)
+        assert "checks=none" in line
+
+    def test_a_blocked_answer_is_not_also_reported_as_allowed(self, monkeypatch):
+        # The two lines are mutually exclusive: counting blocks by grepping must
+        # not double count, and an allowed line on a blocked turn would be false.
+        cat = make_cat()
+        infos = []
+        monkeypatch.setattr(guards.log, "info", infos.append)
+
+        deliver(cat, "scrivimi a mario.rossi@sns.it")
+
+        assert any("output blocked" in line for line in infos)
+        assert not [line for line in infos if "output allowed" in line]
+
+    def test_the_allowed_line_never_carries_the_answer(self, monkeypatch):
+        # Same boundary as every other line this plugin writes: the text stays
+        # out of the log, on the allowed path as much as on the blocked one.
+        cat = make_cat()
+        infos = []
+        monkeypatch.setattr(guards.log, "info", infos.append)
+
+        deliver(cat, "il preventivo riservato per la stampante di reparto")
+
+        assert all("stampante di reparto" not in line for line in infos)
+
+
+class TestActivationAnnouncement:
+    def test_activation_is_announced_with_the_hooks_it_registered(
+        self, monkeypatch
+    ):
+        # The only signal that survives a failed load, because a plugin that
+        # does not load writes none of the other lines either — and silence is
+        # what a broken activation and a quiet instance have in common.
+        infos = []
+        monkeypatch.setattr(guards.log, "info", infos.append)
+
+        guards.activated.function(object())
+
+        line = next(line for line in infos if "plugin activated" in line)
+        assert "fast_reply" in line
+        assert f"priority={guards.INPUT_GUARD_PRIORITY}" in line
+        assert "before_cat_sends_message" in line
+
+    def test_activation_is_a_plugin_override_not_a_flow_hook(self):
+        # `@plugin` overrides are keyed by function name, so the name is the
+        # contract: renaming it silently stops the core from calling it. And it
+        # must not be a hook, or `test_the_plugin_registers_the_expected_flow_hooks`
+        # would be reporting a flow hook this plugin does not have.
+        assert guards.activated.name == "activated"
+        assert not hasattr(guards.activated, "priority")
 
 
 class TestSettingsModel:
@@ -1292,7 +1500,7 @@ class TestSettingsModel:
         Asserted across every path that logs, not just the one that failed once:
         the announcement of the active guards, a classifier failure — which is the
         dangerous one, because it formats an exception whose text comes from
-        `huggingface_hub` — an allowed message at DEBUG, and a block.
+        `huggingface_hub` — an allowed message at INFO, and a block.
 
         The token is checked in three shapes because a partial leak is still a
         leak: the whole value, the part after the `hf_` prefix, and the tail.
@@ -1748,4 +1956,3 @@ class TestOffensiveInputSettings:
         assert settings.offensive_input_classifier_threshold == (
             shipped.offensive_input_classifier_threshold
         )
-

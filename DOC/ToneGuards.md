@@ -182,7 +182,7 @@ model, and never raised: a mapping problem must not take down the hook that runs
 before everything else.
 
 While a model is in that state it is also dropped from the `checks=` list of the
-`DEBUG` line for an allowed message. A check that cannot block must not appear as
+`INFO` line for an allowed message. A check that cannot block must not appear as
 coverage.
 
 ### Error policy
