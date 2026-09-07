@@ -1221,7 +1221,7 @@ class TestClassifierUnavailable:
     def test_an_unavailable_classifier_is_not_listed_among_the_checks(
         self, monkeypatch
     ):
-        # The DEBUG line is where per-turn coverage is recorded, so it must not
+        # The INFO line is where per-turn coverage is recorded, so it must not
         # claim a check that cannot run. Enabled explicitly: a classifier that
         # ships disabled is not listed either, for a different and less
         # interesting reason.
@@ -1618,12 +1618,6 @@ class TestSettingsModel:
             "Keep the field to one sentence and move the rest to DOC/."
         )
 
-    @pytest.mark.skip(
-        reason="descriptions are commented out in settings.py while the admin "
-        "panel's horizontal scrollbar is investigated; shortening them to 140 "
-        "characters did not remove it, so the cause is the layout rather than "
-        "the length. Re-enable this test when the descriptions come back."
-    )
     def test_every_field_still_explains_itself(self):
         # The counterweight to the test above: shortening must not become
         # deleting. A field with no description at all is a worse admin panel

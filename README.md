@@ -14,20 +14,17 @@ The plugin ships **no model weights**. Its prompt-injection guard can be configu
 - Static fallback replies for blocked requests
 - Admin-configurable settings from the Cheshire Cat plugin panel
 - Testable split between pure decision logic and Cheshire Cat hook adapters
-- Architecture prepared for future RAG evidence checks and output guardrails
-- Optional use of Llama classifiers
+- Extensible output checks and telemetry
+- Optional local classifiers, including Llama Prompt Guard
 
-## Current Status
+## Production Status
 
-The plugin is a work in progress.
+The plugin is deployed in production. The controls currently enforced are listed
+in the summary table below.
 
-Currently implemented:
-
-- the guards listed in the summary table below
-- configurable Help Desk email
-- configurable static replies for over-long requests, personal data, output personal data, prompt injection and offensive content
-
-Planned next steps include prompt policy, further output checks, and telemetry.
+Prompt instructions, retrieval tuning and evidence policy remain deployment
+configuration rather than controls implemented by this plugin. See
+[Operational Limits](#operational-limits) before installing it.
 
 The naming of guards is documented in [DOC/GuardTaxonomy.md](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/GuardTaxonomy.md). The plugin keeps three axes separate:
 
@@ -61,6 +58,9 @@ The plugin is split into a small number of focused parts:
 
 This keeps the rule logic testable on its own, while the hook layer stays thin
 and focused on the Cheshire Cat integration.
+
+Project-specific architecture notes and development guidance live under
+`DEV/AGENTS/`.
 
 ## Requirements
 
@@ -115,7 +115,7 @@ read together in the form:
 - `Limits guard: max chars number exceeded message`
 - `Input privacy guard: block e-mail`
 - `Input privacy guard: block fiscal code`
-- `Input privacy guard: block IBAN`
+- `Input privacy guard: IBAN`
 - `Input privacy guard: block phone numbers`
 - `Input privacy guard: phone numbers region`
 - `Privacy guard: personal data detected reply`
@@ -142,16 +142,21 @@ installation does not depend on a model download or on access to a gated
 repository; and `Tone guard: block offensive incoming messages`, because it
 loads a second model into memory and adds one inference
 to every message that reaches it, and its precision on real help-desk traffic
-still has to be measured. Everything else ships enabled.
+still has to be measured. All other guard toggles ship enabled.
 
 The shipped default Help Desk address is a placeholder and should be replaced
 for real deployments.
 
 ### If the Rate Limiter plugin is also installed
 
-Keep `Limits guard: max message chars` **below** Rate Limiter's own
-`max_prompt_length`. The two guards overlap, and the order in which they run
-decides more than which text the user sees.
+If Rate Limiter is needed only to restrict request frequency, disable its
+content checks: set `max_prompt_length` and `complexity_threshold` to `0` and
+leave its blocked-keyword list empty. RAG Guardrails can then handle length,
+privacy and content without Rate Limiter suspending users for those reasons.
+
+If Rate Limiter must also enforce a message length, keep `Limits guard: max
+message chars` **below** its `max_prompt_length`. The two guards overlap, and
+their limits decide more than which text the user sees.
 
 For a message longer than Rate Limiter's limit but shorter than this one, Rate
 Limiter is the plugin that answers, with its own text. It also records a content
@@ -159,10 +164,10 @@ infraction and suspends the user for 5, 15 or 60 minutes, silently blocking
 their next legitimate messages. Nothing in this plugin can undo that, because
 the side effect happens before this plugin's reply is delivered.
 
-Keeping this limit lower means an over-long message is refused here first, with
-an explanation of what to correct and no suspension.
+Keeping this limit lower means that messages between the two limits are refused
+by RAG Guardrails, with an explanation of what to correct and no suspension.
 
-`Privacy guards: public service contacts` ships **empty**, and is the one
+`Privacy guards: allowed contacts` ships **empty**, and is the one
 setting shared by the input and output privacy guards rather than duplicated per
 stage. Contacts listed there — one per line, e-mail addresses and phone numbers
 together — are not treated as personal data on either stage, which is what lets
@@ -172,26 +177,23 @@ listed. Every entry is a deliberate hole in the privacy guards, so list only
 genuinely published contacts; the details are in
 [DOC/OutputGuards.md](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/OutputGuards.md).
 
-## How It Works
+## Operational Limits
 
-The current implementation uses Cheshire Cat hooks at two points of the flow:
-
-- `fast_reply` for input-side guards that can stop a turn before retrieval and generation
-- `before_cat_sends_message` for the current output-side privacy guard
-
-In practice:
-
-- over-long messages are stopped immediately
-- incoming personal data is stopped immediately
-- prompt injection is stopped with built-in patterns and, optionally, with a local classifier
-- offensive input can also be stopped with a local multilingual classifier when that optional guard is enabled
-- generated replies containing personal data are replaced before delivery
-
-Detailed behavior of the classifier-based and output-side guards lives in:
-
-- [DOC/SecurityGuards.md](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/SecurityGuards.md)
-- [DOC/ToneGuards.md](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/ToneGuards.md)
-- [DOC/OutputGuards.md](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/OutputGuards.md)
+- The plugin enforces only the controls in [Guard Summary](#guard-summary). It
+  does not verify evidence sufficiency, groundedness, source consistency or the
+  language of a generated answer.
+- Local classifiers are disabled by default and fail open if a model cannot be
+  loaded. Enabling one requires enough memory and may make the first matching
+  request wait while the model loads.
+- Classifier pipelines stay in memory until the plugin reloads. Concurrent cold
+  requests can temporarily load the same model more than once, and changing a
+  configured model does not immediately release the previous one.
+- A Hugging Face token entered in the admin panel is stored in plain text in
+  `settings.json`. Prefer the `HF_TOKEN` environment variable and exclude that
+  file from backups and support bundles.
+- Input guards run before retrieval and chatbot memory storage, but Cheshire Cat
+  AI can log the incoming message before plugin hooks run. Configure core log
+  access and retention accordingly.
 
 ## Guard Order
 
@@ -214,24 +216,10 @@ This means:
 
 ### Logging
 
-For a detailed reference of the log lines emitted by the plugin — active-guard
-announcements, block lines, allowed-path debug lines, and logging boundaries —
+For a detailed reference of the log lines emitted by the plugin — activation,
+active-guard announcements, allowed and blocked stage lines at `INFO`, and
+logging boundaries —
 see [DOC/Logging.md](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/Logging.md).
-
-## Development
-
-Main files:
-
-- `checks.py`: pure guard logic
-- `classifier_runtime.py`: machinery shared by the local models — pipeline cache, negative cache on failed loads, fail-open contract
-- `prompt_injection_classifier.py`: one expected label against a threshold
-- `offensive_input_classifier.py`: the sum of a model's offensive classes against a threshold
-- `settings.py`: plugin settings model and shipped defaults
-- `rag_guardrails.py`: Cheshire Cat hooks and settings loading
-- `tests/`: the test suite, described in [DOC/TestingCode.md](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/TestingCode.md)
-
-Project-specific architecture notes and development guidance live under
-`DEV/AGENTS/`.
 
 ## Testing
 

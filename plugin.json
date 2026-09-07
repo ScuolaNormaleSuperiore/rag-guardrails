@@ -1,6 +1,6 @@
 {
     "name": "RAG Guardrails",
-    "version": "0.0.4",
+    "version": "0.0.5",
     "description": "Plugin that adds deterministic, configurable guardrails to a website help-desk chatbot's RAG flow, so risky or invalid requests can be stopped early before retrieval or generation.",
     "author_name": "Servizi Informativi SNS",
     "author_url": "https://ict.sns.it",
@@ -8,4 +8,3 @@
     "tags": "guardrails, rag, safety, privacy, security, moderation, chatbot, helpdesk",
     "thumb": "https://raw.githubusercontent.com/ScuolaNormaleSuperiore/rag-guardrails/main/logo.png"
 }
-

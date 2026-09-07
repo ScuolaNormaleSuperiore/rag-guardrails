@@ -189,84 +189,100 @@ class RagGuardrailsSettings(BaseModel):
     message_too_long: str = Field(
         default=DEFAULT_MESSAGE_TOO_LONG,
         title="Limits guard: max chars number exceeded message",
+        description="Reply sent when an input exceeds the configured character limit.",
         json_schema_extra=TEXT_AREA,
     )
 
     detect_input_email: bool = Field(
         default=True,
         title="Input privacy guard: block e-mail",
+        description="Block incoming messages containing a non-allowed e-mail address.",
     )
 
     detect_input_codice_fiscale: bool = Field(
         default=True,
         title="Input privacy guard: block fiscal code",
+        description="Block incoming messages containing a checksum-valid Italian fiscal code.",
     )
 
     detect_input_iban: bool = Field(
         default=True,
         title="Input privacy guard: IBAN",
+        description="Block incoming messages containing a checksum-valid IBAN.",
     )
 
     detect_input_phone: bool = Field(
         default=True,
         title="Input privacy guard: block phone numbers",
+        description="Block incoming messages containing a valid non-allowed phone number.",
     )
 
     input_phone_region: str = Field(
         default=DEFAULT_PHONE_REGION,
         title="Input privacy guard: phone numbers region",
+        description="Country code used to validate incoming phone numbers without an international prefix.",
     )
 
     personal_data_detected: str = Field(
         default=DEFAULT_PERSONAL_DATA_DETECTED,
         title="Privacy guard: personal data detected reply",
+        description="Reply sent when an incoming message contains personal data.",
         json_schema_extra=TEXT_AREA,
     )
 
     detect_output_email: bool = Field(
         default=True,
         title="Output privacy guard: block e-mail",
+        description="Replace generated replies containing a non-allowed e-mail address.",
     )
 
     detect_output_codice_fiscale: bool = Field(
         default=True,
         title="Output privacy guard: block fiscal code",
+        description="Replace generated replies containing a checksum-valid Italian fiscal code.",
     )
 
     detect_output_iban: bool = Field(
         default=True,
         title="Output privacy guard: block IBAN",
+        description="Replace generated replies containing a checksum-valid IBAN.",
     )
 
     detect_output_phone: bool = Field(
         default=True,
         title="Output privacy guard: block phone numbers",
+        description="Replace generated replies containing a valid non-allowed phone number.",
     )
 
     output_phone_region: str = Field(
         default=DEFAULT_PHONE_REGION,
         title="Output privacy guard: phone numbers region",
+        description="Country code used to validate output phone numbers without an international prefix.",
     )
 
     output_personal_data_detected: str = Field(
         default=DEFAULT_OUTPUT_PERSONAL_DATA_DETECTED,
         title="Output privacy guard: personal data detected reply",
+        description="Reply used to replace a generated answer containing personal data.",
         json_schema_extra=TEXT_AREA,
     )
 
     detect_prompt_injection_custom: bool = Field(
         default=True,
         title="Security guard: block prompt injection patterns",
+        description="Block explicit prompt-injection attempts using built-in bilingual patterns.",
     )
 
     detect_prompt_injection_classifier: bool = Field(
         default=False,
         title="Security guard: block prompt injection with local classifier",
+        description="Run the selected local classifier after the deterministic injection patterns.",
     )
 
     prompt_injection_classifier_model: PromptInjectionClassifierModel = Field(
         default=PromptInjectionClassifierModel(DEFAULT_PROMPT_INJECTION_CLASSIFIER_MODEL),
         title="Security guard: prompt injection classifier model",
+        description="Local model used to classify incoming prompt-injection attempts.",
     )
 
     prompt_injection_classifier_threshold: float = Field(
@@ -274,27 +290,32 @@ class RagGuardrailsSettings(BaseModel):
         ge=0.0,
         le=1.0,
         title="Security guard: prompt injection classifier threshold",
+        description="Minimum classifier confidence required to block a prompt-injection attempt.",
     )
 
     huggingface_token: str = Field(
         default="",
         title="Security guard: Hugging Face token",
+        description="Optional token for gated models; prefer the HF_TOKEN environment variable.",
     )
 
     prompt_injection_detected: str = Field(
         default=DEFAULT_PROMPT_INJECTION_DETECTED,
         title="Security guard: prompt injection reply",
+        description="Reply sent when a prompt-injection check blocks an incoming message.",
         json_schema_extra=TEXT_AREA,
     )
 
     detect_offensive_input_classifier: bool = Field(
         default=False,
         title="Tone guard: block offensive incoming messages",
+        description="Run a local classifier to block offensive or violent incoming messages.",
     )
 
     offensive_input_classifier_model: OffensiveInputClassifierModel = Field(
         default=OffensiveInputClassifierModel(DEFAULT_OFFENSIVE_INPUT_CLASSIFIER_MODEL),
         title="Tone guard: offensive input classifier model",
+        description="Local model used to classify offensive or violent incoming messages.",
     )
 
     offensive_input_classifier_threshold: float = Field(
@@ -302,11 +323,13 @@ class RagGuardrailsSettings(BaseModel):
         ge=0.0,
         le=1.0,
         title="Tone guard: offensive input classifier threshold",
+        description="Minimum combined offensive-class score required to block a message.",
     )
 
     offensive_input_detected: str = Field(
         default=DEFAULT_OFFENSIVE_INPUT_DETECTED,
         title="Tone guard: offensive content reply",
+        description="Reply sent when the offensive-input classifier blocks a message.",
         json_schema_extra=TEXT_AREA,
     )
 
@@ -412,4 +435,3 @@ class RagGuardrailsSettings(BaseModel):
 def settings_model():
     """Return the Pydantic model the admin panel builds its form from."""
     return RagGuardrailsSettings
-
