@@ -36,6 +36,7 @@ PLUGIN_METADATA_FILE = REPO_ROOT / "plugin.json"
 INCLUDED_FILES = (
     "plugin.json",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
     "requirements.txt",
     "checks.py",

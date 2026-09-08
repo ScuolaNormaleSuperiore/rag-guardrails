@@ -1,0 +1,41 @@
+name: tests
+
+# Only the unit tests run here. The integration tests need a running Cheshire
+# Cat container, which this workflow deliberately does not build: see
+# DOC/TestingCode.md. Everything goes through run-tests.py, which is the single
+# source of truth for test execution and exits with pytest's own code.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 is the floor Cheshire Cat AI itself declares (requires-python
+        # ">=3.10"); 3.12 is what the plugin is developed on.
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install test dependencies
+        # phonenumberslite is not optional: checks.py imports it at module
+        # level, so without it tests/unit fails at import.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest phonenumberslite
+
+      - name: Run unit tests
+        run: python run-tests.py --unit

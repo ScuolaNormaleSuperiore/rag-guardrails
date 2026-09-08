@@ -71,6 +71,8 @@ python run-tests.py --detailed
 
 Because the exit code is pytest's own, the script can be reused from a git hook or from CI. If a prerequisite is missing, no interpreter with `pytest`, container not running, `compose.yml` not where expected, it says which command fixes it instead of failing obscurely.
 
+**CI runs the unit tests only.** `.github/workflows/tests.yml` calls `python run-tests.py --unit` on every push to `main` and on every pull request, against Python 3.10, 3.11 and 3.12. It builds no container on purpose: `tests/integration` stays a runner job before pushing, and a workflow that built the image would pay for the whole dependency stack, `torch` included, on every commit.
+
 The `pre-commit` hook runs `tests/unit` too, and nothing else: a commit must not depend on Docker being up, or the hook would either block legitimate commits or skip in silence. `tests/integration` is for the runners, before pushing.
 
 **Nothing tests the staged-secret hook any more.** Its regression gate against a
