@@ -5,8 +5,8 @@ named after the plugin slug, ready to be copied into a Cheshire Cat plugins
 directory or attached to a release.
 
 By default this excludes development-only material such as `DEV/`, `DOC/`,
-tests, local caches, and runner scripts. Public documentation should be shipped
-only when it is explicitly meant to be part of the release package.
+`.github/`, tests, local caches, and runner scripts. Public documentation should
+be shipped only when it is explicitly meant to be part of the release package.
 """
 
 from __future__ import annotations
@@ -21,8 +21,11 @@ REPO_ROOT = Path(__file__).resolve().parent
 DIST_DIR = REPO_ROOT / "dist"
 PLUGIN_METADATA_FILE = REPO_ROOT / "plugin.json"
 
-# Keep the package explicit: only runtime files listed here are shipped.
-# Internal documentation under `DOC/` is intentionally excluded by default.
+# Keep the package explicit: nothing ships unless it is listed here. The list
+# holds the runtime modules plus the four documents a release is expected to
+# carry — what the plugin does, what changed, how to report a security defect,
+# and under which licence. Internal documentation under `DOC/` stays out by
+# default, and the README links to it on GitHub instead.
 #
 # **Never add model weights or a Hugging Face cache directory to this list.** It
 # is a licensing boundary, not a size optimisation. This plugin is GPL-3.0-only,
@@ -37,6 +40,7 @@ INCLUDED_FILES = (
     "plugin.json",
     "README.md",
     "CHANGELOG.md",
+    "SECURITY.md",
     "LICENSE",
     "requirements.txt",
     "checks.py",

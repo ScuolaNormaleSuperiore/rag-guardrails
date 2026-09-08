@@ -149,6 +149,15 @@ classifier-based check runs, and a message that is both offensive and a
 prompt-injection attempt is reported as `prompt_injection`, because that guard
 runs first and gives the more pertinent correction.
 
+## Reporting a Security Problem
+
+Do not open a public issue for a guard bypass: a working one is an exploit
+against every installation that has not upgraded yet.
+[SECURITY.md](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/SECURITY.md),
+which also ships inside the release package, carries the private reporting
+channel and says what counts as a finding — the limits listed above are
+documented, not defects.
+
 ## Related Docs
 
 - [DOC/ClassifierLabels.md](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/ClassifierLabels.md): how classifier labels are mapped, verified, and used in decisions
