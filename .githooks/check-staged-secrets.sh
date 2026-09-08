@@ -58,7 +58,9 @@ fi
 # things. It never matched a single-quoted value, the entire reason `\x27` was
 # there; and it stopped matching any value whose characters included x, 2, 7 or a
 # backslash, so a key made of digits slipped through while one made of letters
-# alone was caught. Found by tests/unit/test_git_hooks.py on 2026-08-06.
+# alone was caught. Found on 2026-08-06 by tests that executed this script in disposable
+# repositories; they were removed on 2026-09-08 with their Git dependency, so
+# nothing catches the next one.
 #
 # No verbatim example is written here on purpose: this file is scanned by the very
 # patterns it defines, and a sample assignment in a comment would block every
@@ -92,7 +94,9 @@ for pattern in "${patterns[@]}"; do
 	# `unknown option -- ---BEGIN ...`. The `2>/dev/null` then hid the message and
 	# `|| true` swallowed the exit code, so the most serious pattern in this list
 	# reported nothing and every commit carrying a private key passed the gate.
-	# Found by tests/unit/test_git_hooks.py on 2026-08-06.
+	# Found on 2026-08-06 by tests that executed this script in disposable
+# repositories; they were removed on 2026-09-08 with their Git dependency, so
+# nothing catches the next one.
 	# Exit 1 means "no match". Any other non-zero status means the scanner itself
 	# failed (for example because a newly added pattern is invalid), and must block
 	# the commit instead of silently degrading to "no secret found".

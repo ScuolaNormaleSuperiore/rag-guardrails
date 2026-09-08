@@ -9,16 +9,25 @@ Guardrails fail silently: when a control stops working the chatbot does not rais
 | `checks.py` | All decision logic: thresholds, verdicts, rules. Imports nothing from `cat` | No |
 | `settings.py` | The settings model the admin form is built from, and the shipped defaults | Yes |
 | `rag_guardrails.py` | The hooks only: read from the Cat, delegate to `checks`, write back | Yes |
-| `tests/unit/` | Pure logic and shipped metadata. Plain `pytest`, no Cheshire Cat at all. One file also needs Bash and Git, see below | No |
+| `tests/unit/` | Pure logic and shipped metadata. Plain `pytest`, no Cheshire Cat at all | No |
 | `tests/integration/` | Hook wiring and configuration, against a fake `cat` object | Yes |
 
 The test folders are the classification: what goes in `tests/unit/` must import nothing from `cat`, and a file that breaks that rule fails loudly instead of being silently skipped. Everything under `tests/unit/` therefore runs anywhere, which is what makes the fast local loop possible.
 
-**One file in that tier needs external tools, and it is the exception that proves the rule rather than a violation of it.** `tests/unit/test_git_hooks.py` executes the real `check-staged-secrets.sh` in disposable repositories, because a Bash script cannot be exercised by importing it, so it needs **Bash and Git**. It still imports nothing from `cat`.
+**The whole suite now runs in both environments with no skips**, and that took
+removing something rather than adding it. `tests/unit/test_git_hooks.py` executed
+the real `check-staged-secrets.sh` in disposable repositories, so it needed Bash
+and Git; the Cheshire Cat container has Bash but no Git, which made eleven tests
+fail there for a reason that had nothing to do with this repository. Installing
+Git in the image was tried and rejected: the plugin folders live inside the
+build context, so every plugin edit invalidates `COPY ./cat` and the rebuild
+reinstalls the dependency stack of every plugin, `torch` included — fifteen
+minutes for a package of a few megabytes.
 
-Neither tool is guaranteed. The Cheshire Cat container has Bash but no Git, and before 2026-09-08 that produced **eleven failures** in the container run of the full suite — every one of them a bare `FileNotFoundError` from `subprocess`, none of them about this repository. A suite that is normally red stops signalling anything, which is the same failure mode this plugin exists to prevent in the chatbot.
-
-Each tool is now checked at the point of use and the tests skip with a reason naming the missing one. A skip is defensible here in a way it would not be for a decision test, and the argument is what makes the coverage real rather than nominal: these tests protect a **Git hook**, and a Git hook is invoked by Git. Wherever the protection matters — a developer committing, where `pre-commit` runs `tests/unit` on the host — Git is present by definition. The only environment that skips them is the one where the hook could not run anyway.
+**What that removal cost is written down in `DEV/AGENTS/ISSUES_TODO.md`**, because
+it is a real loss and not a cleanup: nothing verifies the secret scanner's
+regular expressions any more, and this repository already had two patterns that
+silently matched nothing for months. Those tests are how that was found.
 
 `tests/integration/` needs the core only because the module under test imports `cat.log` and `cat.mad_hatter.decorators` at import time, not because a Cat must be running. Those tests never contact a live instance: the container is used as an interpreter, not as a server. Automated tests against a running instance do not exist yet; see `What is not automated` below.
 
@@ -64,11 +73,11 @@ Because the exit code is pytest's own, the script can be reused from a git hook 
 
 The `pre-commit` hook runs `tests/unit` too, and nothing else: a commit must not depend on Docker being up, or the hook would either block legitimate commits or skip in silence. `tests/integration` is for the runners, before pushing.
 
-`tests/unit/test_git_hooks.py` executes the staged-secret hook in disposable Git
-repositories and covers every credential shape in its hand-written pattern list.
-This is the regression gate against a malformed pattern silently disabling part
-of the scan. It uses Git Bash on Windows and ordinary Bash elsewhere; when Bash
-is unavailable, only this file is skipped and pytest reports the skip explicitly.
+**Nothing tests the staged-secret hook any more.** Its regression gate against a
+malformed pattern silently disabling part of the scan was removed on 2026-09-08
+together with its Git dependency; the open issue in
+`DEV/AGENTS/ISSUES_TODO.md` carries what that costs and how to get the coverage
+back without Git.
 
 Two limits of that gate are worth knowing. It runs `pytest` against the files on disk, not against the staged snapshot, so with unstaged changes in the working tree what passes is not exactly what is being committed. And if no interpreter with `pytest` is available it warns and lets the commit through, on the grounds that blocking for a missing development tool teaches `--no-verify`, which would also disable the secret scan.
 
