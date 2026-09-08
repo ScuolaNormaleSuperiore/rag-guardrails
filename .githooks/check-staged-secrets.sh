@@ -93,7 +93,21 @@ for pattern in "${patterns[@]}"; do
 	# `|| true` swallowed the exit code, so the most serious pattern in this list
 	# reported nothing and every commit carrying a private key passed the gate.
 	# Found by tests/unit/test_git_hooks.py on 2026-08-06.
-	matches="$(grep -E -i -n -e "$pattern" <<< "$added_lines" 2>/dev/null || true)"
+	# Exit 1 means "no match". Any other non-zero status means the scanner itself
+	# failed (for example because a newly added pattern is invalid), and must block
+	# the commit instead of silently degrading to "no secret found".
+	if matches="$(grep -E -i -n -e "$pattern" <<< "$added_lines" 2>&1)"; then
+		:
+	else
+		grep_status=$?
+		if [ "$grep_status" -ne 1 ]; then
+			echo "[RAG-GUARDS pre-commit] Secret scan failed while evaluating a pattern:" >&2
+			printf '%s\n' "$matches" >&2
+			echo "Commit blocked because the secret scan did not complete." >&2
+			exit 2
+		fi
+		matches=""
+	fi
 	if [ -n "$matches" ]; then
 		if [ "$found" -eq 0 ]; then
 			echo "[RAG-GUARDS pre-commit] Potential secret detected in staged changes:" >&2

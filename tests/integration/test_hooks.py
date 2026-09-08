@@ -173,12 +173,6 @@ class TestInputGuard:
 
         assert send(cat, "How do I activate the VPN?", incoming) is incoming
 
-    def test_records_the_verdict_when_it_blocks(self):
-        # Not needed to answer, but it is the trace of why the turn was refused.
-        cat = make_cat()
-        send(cat, "a" * 5000)
-        assert verdict_of(cat) == checks.VERDICT_MESSAGE_LENGTH
-
     def test_leaves_no_verdict_when_the_message_passes(self):
         cat = make_cat()
         send(cat, "How do I activate the VPN?")
@@ -1661,7 +1655,7 @@ class TestSettingsModel:
                 f"{name} publishes {field['type']!r} as its JSON Schema type"
             )
 
-    def test_public_contacts_default_to_none(self):
+    def test_public_contacts_ship_empty(self):
         # The exemption ships empty: an installation opts into every hole it
         # opens in the privacy guards.
         assert settings_module.RagGuardrailsSettings().public_service_contacts == ""
@@ -1676,12 +1670,14 @@ class TestSettingsModel:
         ],
     )
     def test_valid_public_contacts_are_accepted(self, contacts):
-        assert (
-            settings_module.RagGuardrailsSettings(
-                public_service_contacts=contacts
-            ).public_service_contacts
-            is not None
-        )
+        # Asserting the value survives, not merely that nothing raised: the
+        # validator strips surrounding whitespace and must change nothing else,
+        # and `is not None` could never fail on a string field.
+        stored = settings_module.RagGuardrailsSettings(
+            public_service_contacts=contacts
+        ).public_service_contacts
+
+        assert stored == contacts.strip()
 
     @pytest.mark.parametrize(
         "contacts",

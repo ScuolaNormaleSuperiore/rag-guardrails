@@ -5,17 +5,7 @@
 
 It adds deterministic and configurable guardrails around the normal RAG flow so that risky or invalid requests can be stopped early, before they reach retrieval or generation.
 
-The plugin ships **no model weights**. Its prompt-injection guard can be configured to run `meta-llama/Llama-Prompt-Guard-2-86M`, which is downloaded at runtime from Hugging Face by whoever installs the plugin, under Meta's own terms. The attribution that licence requires, and the licence of every model this plugin can run, are in [License and Legal Notes](#license-and-legal-notes).
-
-## Features
-
-- Input guardrails for message validation before generation
-- Output guardrail for personal-data leakage before delivery
-- Static fallback replies for blocked requests
-- Admin-configurable settings from the Cheshire Cat plugin panel
-- Testable split between pure decision logic and Cheshire Cat hook adapters
-- Extensible output checks and telemetry
-- Optional local classifiers, including Llama Prompt Guard
+The plugin ships **no model weights**. Its prompt-injection guard can be configured to run `meta-llama/Llama-Prompt-Guard-2-86M`, which is downloaded at runtime from Hugging Face by whoever installs the plugin, under Meta's own terms. The attribution that licence requires is in [License and Legal Notes](#license-and-legal-notes); the licence of every model this plugin can run is in [DOC/Licenses.md](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/Licenses.md).
 
 ## Production Status
 
@@ -107,75 +97,34 @@ After activation, open:
 `Plugins -> RAG Guardrails -> Settings`
 
 Settings are named after the guard family they belong to, so related options
-read together in the form:
+read together: `Limits guard:`, `Input privacy guard:`, `Output privacy guard:`,
+`Security guard:`, `Tone guard:`. Every field carries its own description in the
+panel, so this document lists only the ones that need a decision rather than a
+reading.
 
-- `Help Desk e-mail`
-- `Privacy guards: allowed contacts`
-- `Limits guard: max message chars`
-- `Limits guard: max chars number exceeded message`
-- `Input privacy guard: block e-mail`
-- `Input privacy guard: block fiscal code`
-- `Input privacy guard: IBAN`
-- `Input privacy guard: block phone numbers`
-- `Input privacy guard: phone numbers region`
-- `Privacy guard: personal data detected reply`
-- `Output privacy guard: block e-mail`
-- `Output privacy guard: block fiscal code`
-- `Output privacy guard: block IBAN`
-- `Output privacy guard: block phone numbers`
-- `Output privacy guard: phone numbers region`
-- `Output privacy guard: personal data detected reply`
-- `Security guard: block prompt injection patterns`
-- `Security guard: block prompt injection with local classifier`
-- `Security guard: prompt injection classifier model`
-- `Security guard: prompt injection classifier threshold`
-- `Security guard: Hugging Face token`
-- `Security guard: prompt injection reply`
-- `Tone guard: block offensive incoming messages`
-- `Tone guard: offensive input classifier model`
-- `Tone guard: offensive input classifier threshold`
-- `Tone guard: offensive content reply`
+**Two guard toggles ship switched off.** `Security guard: block prompt injection
+with local classifier`, so a first installation does not depend on a model
+download or on access to a gated repository; and `Tone guard: block offensive
+incoming messages`, because it loads a second model into memory, adds one
+inference to every message that reaches it, and its precision on real help-desk
+traffic still has to be measured. All other guard toggles ship enabled.
 
-Two settings ship **switched off**:
-`Security guard: block prompt injection with local classifier`, so a first
-installation does not depend on a model download or on access to a gated
-repository; and `Tone guard: block offensive incoming messages`, because it
-loads a second model into memory and adds one inference
-to every message that reaches it, and its precision on real help-desk traffic
-still has to be measured. All other guard toggles ship enabled.
+**The shipped Help Desk address is a placeholder** and is shown to users
+verbatim on any installation where nobody opens the panel. Replace it.
 
-The shipped default Help Desk address is a placeholder and should be replaced
-for real deployments.
-
-### If the Rate Limiter plugin is also installed
-
-If Rate Limiter is needed only to restrict request frequency, disable its
-content checks: set `max_prompt_length` and `complexity_threshold` to `0` and
-leave its blocked-keyword list empty. RAG Guardrails can then handle length,
-privacy and content without Rate Limiter suspending users for those reasons.
-
-If Rate Limiter must also enforce a message length, keep `Limits guard: max
-message chars` **below** its `max_prompt_length`. The two guards overlap, and
-their limits decide more than which text the user sees.
-
-For a message longer than Rate Limiter's limit but shorter than this one, Rate
-Limiter is the plugin that answers, with its own text. It also records a content
-infraction and suspends the user for 5, 15 or 60 minutes, silently blocking
-their next legitimate messages. Nothing in this plugin can undo that, because
-the side effect happens before this plugin's reply is delivered.
-
-Keeping this limit lower means that messages between the two limits are refused
-by RAG Guardrails, with an explanation of what to correct and no suspension.
-
-`Privacy guards: allowed contacts` ships **empty**, and is the one
-setting shared by the input and output privacy guards rather than duplicated per
-stage. Contacts listed there — one per line, e-mail addresses and phone numbers
+**`Privacy guards: allowed contacts` ships empty**, and is the one setting shared
+by the input and output privacy guards rather than duplicated per stage.
+Contacts listed there — one per line, e-mail addresses and phone numbers
 together — are not treated as personal data on either stage, which is what lets
 the assistant give out the Help Desk number without the answer being replaced by
 the fallback. The Help Desk address is always exempt and does not need to be
 listed. Every entry is a deliberate hole in the privacy guards, so list only
 genuinely published contacts; the details are in
 [DOC/OutputGuards.md](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/OutputGuards.md).
+
+**If the `Rate Limiter` plugin is also installed**, its content checks overlap
+with these and its suspensions are outside this plugin's reach. See
+[DOC/RateLimiter.md](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/RateLimiter.md).
 
 ## Operational Limits
 
@@ -250,6 +199,8 @@ runner behaves, and what is verified manually — is in
 - [DOC/OutputGuards.md](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/OutputGuards.md): output-side privacy guard details
 - [DOC/Logging.md](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/Logging.md): detailed log reference
 - [DOC/TestingCode.md](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/TestingCode.md): test layout, runners and manual checks
+- [DOC/Licenses.md](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/Licenses.md): the licence of the plugin and of every supported model
+- [DOC/RateLimiter.md](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/RateLimiter.md): sharing an installation with the Rate Limiter plugin
 
 ## Packaging
 
@@ -263,74 +214,32 @@ When a new file must be shipped with the plugin, update `package-plugin.py` so t
 
 ## License and Legal Notes
 
-### The plugin
+The code in this repository is released under **GNU General Public License v3.0
+only**. See `LICENSE`.
 
-The code in this repository is released under **GNU General Public License v3.0 only**. See `LICENSE`.
-
-### The models are not part of it
-
-This plugin distributes **no model weights**. The release package contains ten
-files — Python modules, `plugin.json`, `README.md`, `LICENSE`,
-`requirements.txt` — and nothing else. Every classifier model is downloaded at
-runtime, from Hugging Face, by the person who installs and configures the
+The plugin distributes **no model weights**. Every classifier model is downloaded
+at runtime, from Hugging Face, by the person who installs and configures the
 plugin, and each one carries its own licence which that person accepts directly
-with its publisher.
-
-That separation is what keeps the arrangement clean. The GPL governs this code;
-it does not and cannot govern weights it never ships. **Never add model
-weights to the release package**: some of the models below are distributed
-under licences that impose use restrictions, and GPLv3 section 10 forbids
-adding restrictions to conveyed material — bundling them would create a genuine
-incompatibility where today there is none.
+with its publisher. That separation is deliberate and load-bearing: the GPL
+governs this code and cannot govern weights it never ships, and some of the
+supported models carry use restrictions that GPLv3 section 10 forbids adding to
+conveyed material. **Never add model weights to the release package.**
 
 ### Built with Llama
 
-The prompt-injection guard can be configured to run Meta's Llama Prompt Guard 2. When it is, the following notice applies:
+The prompt-injection guard can be configured to run Meta's Llama Prompt Guard 2.
+When it is, the following notice applies:
 
 > **Llama is licensed under the Llama Community License, Copyright © Meta Platforms, Inc. All Rights Reserved.**
 
-The applicable version, read from the model card on 2026-08-06, is the
-**Llama 4 Community License Agreement** (`license_name: llama4`). Both Meta
-models are **gated**: access is granted manually by Meta after the request is
-accepted, so using them requires accepting Meta's terms on the model page and
-authenticating at runtime. See [DOC/SecurityGuards.md](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/SecurityGuards.md)
-for the operational steps.
+Both Meta models are **gated**: access is granted manually by Meta after the
+request is accepted, so using them requires accepting Meta's terms on the model
+page and authenticating at runtime.
 
-### Licence of each supported model
+### The rest
 
-Verified against the Hugging Face model cards on 2026-08-06. Check them again
-before a release: a publisher can change a licence, and this table is a
-snapshot rather than a promise.
+The licence of each of the six supported models, with the date it was verified,
+which two are not free software, and the runtime dependencies —
+[DOC/Licenses.md](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/Licenses.md).
 
-| Model | Guard | Licence | Gated |
-| --- | --- | --- | --- |
-| `meta-llama/Llama-Prompt-Guard-2-86M` | prompt injection, **shipped default** | Llama 4 Community License | yes, manual approval |
-| `meta-llama/Llama-Prompt-Guard-2-22M` | prompt injection | Llama 4 Community License | yes, manual approval |
-| `deepset/deberta-v3-base-injection` | prompt injection | MIT | no |
-| `IMSyPP/hate_speech_multilingual` | offensive input, **shipped default** | MIT | no |
-| `patriciacarla/HS-multilingual-DNR` | offensive input | Apache-2.0 | no |
-| `textdetox/bert-multilingual-toxicity-classifier` | offensive input | OpenRAIL++ | no |
-
-Two entries deserve attention before you enable them:
-
-- **The two Meta models are not free software.** The Llama Community License
-  is not an open-source licence: it carries an acceptable-use policy, a
-  monthly-active-users clause and naming requirements. Nothing about that
-  conflicts with this plugin's GPLv3 as long as the weights stay out of the
-  package, but an installation that enables them has accepted terms the GPL
-  does not grant.
-- **`textdetox/bert-multilingual-toxicity-classifier` is OpenRAIL++**, which
-  permits redistribution but attaches behavioural use restrictions that must be
-  passed on downstream. It is the only offensive-input model of the three that
-  is not plainly permissive.
-
-The two shipped defaults sit on opposite sides of this: the tone guard defaults
-to an MIT model, the prompt-injection guard defaults to a gated Meta one. If a
-deployment needs to avoid non-free licences entirely, both guards have a
-permissive option — `deepset/deberta-v3-base-injection` (MIT) and the default
-`IMSyPP/hate_speech_multilingual` (MIT) — selectable from the admin panel with
-no code change.
-
-### Runtime dependencies
-
-Declared in `requirements.txt`, all GPL-compatible: `phonenumberslite` (Apache-2.0), `transformers` (Apache-2.0), `torch` (BSD-3-Clause).
+Check that table again before a release: a publisher can change a licence.
