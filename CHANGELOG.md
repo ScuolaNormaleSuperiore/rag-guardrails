@@ -26,8 +26,12 @@ published plugin, not a change in what the guards do.
   baseline that until now lived only in the README.
 - This changelog, and `SECURITY.md` with a private channel for reporting a
   guard bypass.
-- Continuous integration: the 200 unit tests run on every push and pull
+- Continuous integration: the unit suite runs on every push and pull
   request, on Python 3.10 through 3.12.
+- A test asserting that every file under `tests/` imports on its own. The
+  core imports a plugin's files recursively, `tests/` included, so a test
+  file that cannot be imported makes it log `Unable to load plugin` for a
+  plugin that is running normally.
 
 ### Changed
 
