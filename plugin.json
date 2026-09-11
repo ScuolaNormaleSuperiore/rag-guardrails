@@ -1,6 +1,6 @@
 {
     "name": "RAG Guardrails",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Plugin that adds deterministic checks and optional local classifiers as guardrails around a website help-desk chatbot's RAG flow, so risky or invalid requests can be stopped early before retrieval or generation.",
     "min_cat_version": "1.9.2",
     "author_name": "Servizi Informativi SNS",

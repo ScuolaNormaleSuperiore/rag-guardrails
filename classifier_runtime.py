@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from typing import Any
 
 try:
@@ -32,6 +33,15 @@ except Exception:  # pragma: no cover - available only with the core importable
 
 
 _CLASSIFIER_PIPELINES: dict[str, Any] = {}
+
+# A cold model load can involve disk I/O and a Hugging Face download. Only one
+# request may perform that work for a given model, while different models remain
+# independent. Waiting is bounded so a stuck third-party load cannot hold every
+# later request indefinitely; callers turn the timeout into the normal fail-open
+# classifier behaviour.
+CLASSIFIER_LOAD_WAIT_SECONDS = 5.0
+_CLASSIFIER_LOAD_LOCKS: dict[str, Any] = {}
+_CLASSIFIER_LOAD_LOCKS_GUARD = threading.Lock()
 
 # Models whose load already failed, with the reason. This is a negative cache and
 # it exists for cost, not for tidiness: without it every message retries the
@@ -129,6 +139,12 @@ def classifier_load_error(model_name: str) -> str | None:
     return _FAILED_CLASSIFIER_MODELS.get(model_name)
 
 
+def _classifier_load_lock(model_name: str):
+    """Return the single load lock assigned to `model_name`."""
+    with _CLASSIFIER_LOAD_LOCKS_GUARD:
+        return _CLASSIFIER_LOAD_LOCKS.setdefault(model_name, threading.Lock())
+
+
 def get_pipeline(model_name: str, token: str | None = None, **pipeline_kwargs):
     """Return the cached text-classification pipeline for `model_name`.
 
@@ -164,39 +180,70 @@ def get_pipeline(model_name: str, token: str | None = None, **pipeline_kwargs):
         # repeating it once per message is the flood this cache removes.
         raise ClassifierUnavailable(previous_error)
 
-    from transformers import pipeline as transformers_pipeline
+    load_lock = _classifier_load_lock(model_name)
+    if not load_lock.acquire(timeout=CLASSIFIER_LOAD_WAIT_SECONDS):
+        # The loading request may have completed exactly as the timeout fired.
+        # Re-read both caches before degrading this caller to fail-open.
+        pipeline = _CLASSIFIER_PIPELINES.get(model_name)
+        if pipeline is not None:
+            return pipeline
+        previous_error = _FAILED_CLASSIFIER_MODELS.get(model_name)
+        if previous_error is not None:
+            raise ClassifierUnavailable(previous_error)
+        raise ClassifierUnavailable(
+            "timed out waiting for another request to load classifier model "
+            f"{model_name} after {CLASSIFIER_LOAD_WAIT_SECONDS:g} seconds"
+        )
 
-    runtime_log.info(
-        "[rag-guardrails] loading classifier model "
-        f"{model_name} into memory; Transformers will use the local Hugging Face "
-        "cache when available and download missing files if needed"
-    )
     try:
-        pipeline = transformers_pipeline(
-            "text-classification",
-            model=model_name,
-            token=token,
-            **pipeline_kwargs,
-        )
-    except Exception as error:
-        # Redacted before it is stored, not only before it is logged: the reason is
-        # kept in the negative cache and handed to callers by
-        # `classifier_load_error()`, which is another way for it to reach a log.
-        reason = redact_secrets(str(error), token)
-        _FAILED_CLASSIFIER_MODELS[model_name] = reason
-        runtime_log.warning(
-            "[rag-guardrails] failed to load classifier "
-            f"model {model_name}: {reason}; it will not be retried until the "
-            f"plugin reloads.{access_remediation(model_name, error)}"
-        )
-        raise
+        # Another request may have populated either cache while this one waited.
+        pipeline = _CLASSIFIER_PIPELINES.get(model_name)
+        if pipeline is not None:
+            runtime_log.info(
+                "[rag-guardrails] classifier pipeline cache hit "
+                f"for model {model_name}"
+            )
+            return pipeline
 
-    runtime_log.info(
-        "[rag-guardrails] classifier model "
-        f"{model_name} loaded and cached in memory"
-    )
-    _CLASSIFIER_PIPELINES[model_name] = pipeline
-    return pipeline
+        previous_error = _FAILED_CLASSIFIER_MODELS.get(model_name)
+        if previous_error is not None:
+            raise ClassifierUnavailable(previous_error)
+
+        from transformers import pipeline as transformers_pipeline
+
+        runtime_log.info(
+            "[rag-guardrails] loading classifier model "
+            f"{model_name} into memory; Transformers will use the local Hugging Face "
+            "cache when available and download missing files if needed"
+        )
+        try:
+            pipeline = transformers_pipeline(
+                "text-classification",
+                model=model_name,
+                token=token,
+                **pipeline_kwargs,
+            )
+        except Exception as error:
+            # Redacted before it is stored, not only before it is logged: the reason is
+            # kept in the negative cache and handed to callers by
+            # `classifier_load_error()`, which is another way for it to reach a log.
+            reason = redact_secrets(str(error), token)
+            _FAILED_CLASSIFIER_MODELS[model_name] = reason
+            runtime_log.warning(
+                "[rag-guardrails] failed to load classifier "
+                f"model {model_name}: {reason}; it will not be retried until the "
+                f"plugin reloads.{access_remediation(model_name, error)}"
+            )
+            raise
+
+        runtime_log.info(
+            "[rag-guardrails] classifier model "
+            f"{model_name} loaded and cached in memory"
+        )
+        _CLASSIFIER_PIPELINES[model_name] = pipeline
+        return pipeline
+    finally:
+        load_lock.release()
 
 
 def model_labels(pipeline) -> tuple[str, ...]:

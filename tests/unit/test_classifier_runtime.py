@@ -11,7 +11,9 @@ broken model not taking the other's down with it.
 """
 
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event, Lock
 
 import pytest
 
@@ -36,9 +38,13 @@ def reset_classifier_caches():
     """
     runtime._CLASSIFIER_PIPELINES.clear()
     runtime._FAILED_CLASSIFIER_MODELS.clear()
+    with runtime._CLASSIFIER_LOAD_LOCKS_GUARD:
+        runtime._CLASSIFIER_LOAD_LOCKS.clear()
     yield
     runtime._CLASSIFIER_PIPELINES.clear()
     runtime._FAILED_CLASSIFIER_MODELS.clear()
+    with runtime._CLASSIFIER_LOAD_LOCKS_GUARD:
+        runtime._CLASSIFIER_LOAD_LOCKS.clear()
 
 
 def fake_transformers(monkeypatch, pipeline_factory):
@@ -150,6 +156,67 @@ class TestPipelineCache:
 
         assert captured["token"] == "hf_test"
         assert captured["kwargs"] == {"device": -1}
+
+    def test_concurrent_calls_load_the_same_model_once(self, monkeypatch):
+        calls = 0
+        calls_lock = Lock()
+        first_load_entered = Event()
+        duplicate_load_entered = Event()
+        release_load = Event()
+
+        def slow_pipeline(task, model, token=None, **kwargs):
+            nonlocal calls
+            with calls_lock:
+                calls += 1
+                if calls == 2:
+                    duplicate_load_entered.set()
+            first_load_entered.set()
+            assert release_load.wait(timeout=2)
+            return object()
+
+        fake_transformers(monkeypatch, slow_pipeline)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first = executor.submit(runtime.get_pipeline, A_MODEL)
+            assert first_load_entered.wait(timeout=1)
+            second = executor.submit(runtime.get_pipeline, A_MODEL)
+            duplicate_observed = duplicate_load_entered.wait(timeout=0.5)
+            release_load.set()
+            first_pipeline = first.result(timeout=1)
+            second_pipeline = second.result(timeout=1)
+
+        assert not duplicate_observed
+        assert calls == 1
+        assert first_pipeline is second_pipeline
+
+    def test_waiting_for_a_stuck_load_times_out_fail_open(self, monkeypatch):
+        attempts = []
+
+        def fake_pipeline(task, model, token=None, **kwargs):
+            attempts.append(model)
+            return object()
+
+        fake_transformers(monkeypatch, fake_pipeline)
+        monkeypatch.setattr(runtime, "CLASSIFIER_LOAD_WAIT_SECONDS", 0.01)
+        load_lock = runtime._classifier_load_lock(A_MODEL)
+        load_lock.acquire()
+        try:
+            with pytest.raises(runtime.ClassifierUnavailable, match="timed out"):
+                runtime.get_pipeline(A_MODEL)
+        finally:
+            load_lock.release()
+
+        assert attempts == []
+        assert runtime.classifier_load_error(A_MODEL) is None
+
+    def test_a_stuck_model_does_not_block_a_different_model(self, monkeypatch):
+        fake_transformers(monkeypatch, lambda *args, **kwargs: object())
+        blocked_model_lock = runtime._classifier_load_lock(A_MODEL)
+        blocked_model_lock.acquire()
+        try:
+            assert runtime.get_pipeline(ANOTHER_MODEL) is not None
+        finally:
+            blocked_model_lock.release()
 
 
 class TestAccessRemediation:
