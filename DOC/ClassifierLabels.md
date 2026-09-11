@@ -232,9 +232,18 @@ So:
 - no label-mismatch warning is emitted
 - no load failure happens just because `id2label` was unreadable
 - the decision still follows the normal rule of the guard
+- **the model is not recorded as verified**, so the check is attempted again on
+  the next message rather than skipped for the life of the plugin
 
 This is deliberate: inability to verify the labels is weaker than inability to
 run the model at all.
+
+That last point is the difference between «not verified yet» and «verified»,
+and getting it wrong is silent. The tone guard used to record the model before
+reading its labels, so an unreadable configuration filed it as verified without
+anything having been checked — and the warning that exists precisely to catch a
+guard which is switched on and cannot block would then never be emitted for that
+model. Both guards now record only after a successful read.
 
 ## What happens if the model cannot load
 

@@ -300,3 +300,38 @@ class TestLabelMismatchIsLoud:
 
         assert result["triggered"] is False
         assert result["score"] == 0.0
+
+    def test_an_unreadable_configuration_is_retried_rather_than_assumed_fine(
+        self, monkeypatch
+    ):
+        # The record of «already verified» is written only once the labels have
+        # actually been read. It used to be written first, so a model whose
+        # configuration could not be parsed — `model_labels()` returning an empty
+        # tuple, its documented degradation — was filed as verified without
+        # anything having been checked, and the check was never attempted again.
+        # The failure it exists to catch is a guard that is switched on, blocks
+        # nothing, and says nothing.
+        warnings = []
+        monkeypatch.setattr(
+            offensive.runtime_log, "warning", lambda message: warnings.append(message)
+        )
+
+        # No `model` attribute at all, which is what `model_labels()` reads.
+        unreadable = type("Pipeline", (), {"__call__": lambda self, text, **kw: []})()
+        offensive._warn_on_label_mismatch(MODEL, unreadable)
+
+        assert MODEL not in offensive._VERIFIED_MODELS
+        assert warnings == []
+
+        # The next message carries a readable configuration, and the check that
+        # was skipped now runs and reports.
+        install_pipeline(
+            MODEL,
+            {"SAFE": 0.9, "UNSAFE": 0.1},
+            id2label={0: "SAFE", 1: "UNSAFE"},
+        )
+        offensive.classify_offensive_input("any", model_name=MODEL)
+
+        assert MODEL in offensive._VERIFIED_MODELS
+        assert len(warnings) == 1
+        assert "cannot block anything" in warnings[0]

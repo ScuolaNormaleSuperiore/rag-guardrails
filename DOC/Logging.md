@@ -130,6 +130,24 @@ detectors are skipped: without it, three unrelated situations produced no output
 line at all — a clean answer, a turn refused on `fast_reply` that never reached
 generation, and an output stage with every detector off.
 
+**«Actually examined» is meant literally, and on the input stage it is not the
+same as «switched on».** The three deterministic checks are settled by the
+configuration: when enabled they run every time and cannot fail. The two
+classifiers can be enabled and still not look at a message — a model whose load
+failed, or one still loading that this request waited five seconds for and gave
+up on — so they appear in `checks` only when they report having examined it. A
+turn during a cold start therefore reads:
+
+```text
+[rag-guardrails] input allowed, stage='input', checks=length+injection_patterns+personal_data, latency_ms=5000.58
+```
+
+with no `injection_classifier`, next to a single `classifier unavailable`
+warning covering the whole degraded window. The line used to be built from the
+settings instead, so it named the classifier on every one of those turns while
+the deduplicated warning appeared once — which made the log say the opposite of
+what had happened, on exactly the turns where it mattered.
+
 The two lines are mutually exclusive with their `blocked` counterparts, so
 counting either one by grepping cannot double count a turn.
 

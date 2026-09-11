@@ -14,9 +14,19 @@ Reference: DOC/ToneGuards.md, which describes this guard in detail.
 from __future__ import annotations
 
 try:
-    from .classifier_runtime import get_pipeline, model_labels, runtime_log
+    from .classifier_runtime import (
+        get_pipeline,
+        model_labels,
+        normalize_scores,
+        runtime_log,
+    )
 except ImportError:  # pragma: no cover - depends on how the module is loaded
-    from classifier_runtime import get_pipeline, model_labels, runtime_log
+    from classifier_runtime import (
+        get_pipeline,
+        model_labels,
+        normalize_scores,
+        runtime_log,
+    )
 
 
 DEFAULT_OFFENSIVE_INPUT_CLASSIFIER_MODEL = "IMSyPP/hate_speech_multilingual"
@@ -114,14 +124,25 @@ def _warn_on_label_mismatch(model_name: str, pipeline) -> None:
 
     Reported once per model, and never raised: a mapping problem must not take
     down the hook that runs before everything else.
+
+    «Once per model» starts counting when the labels have actually been read.
+    The record used to be written before the read, so a model whose
+    configuration could not be parsed — the documented degradation of
+    `model_labels()`, which then returns an empty tuple — was filed as verified
+    without anything having been verified, and the check was never attempted
+    again for the life of the plugin. An unreadable configuration now means «try
+    again on the next message» rather than «assume it is fine forever», which is
+    the only safe reading for a check whose whole purpose is to catch a guard
+    that is switched on and cannot block.
     """
     if model_name in _VERIFIED_MODELS:
         return
-    _VERIFIED_MODELS.add(model_name)
 
     returned = model_labels(pipeline)
-    if not returned:  # pragma: no cover - defensive, every model carries id2label
+    if not returned:
         return
+
+    _VERIFIED_MODELS.add(model_name)
 
     reachable = {
         _semantic_name(model_name, label).upper() for label in returned
@@ -137,20 +158,6 @@ def _warn_on_label_mismatch(model_name: str, pipeline) -> None:
         "the check is enabled but cannot block anything. Its label mapping in "
         "offensive_input_classifier.py needs updating"
     )
-
-
-def _all_scores(result) -> list[dict]:
-    """Normalize what the pipeline returns into one list of label/score dicts.
-
-    `transformers` has returned a dict, a list of dicts, and a list containing
-    one list of dicts across versions and arguments. Normalizing here keeps that
-    variability out of the decision rule below.
-    """
-    if isinstance(result, dict):
-        return [result]
-    if result and isinstance(result[0], list):
-        return list(result[0])
-    return list(result)
 
 
 def classify_offensive_input(
@@ -183,9 +190,10 @@ def classify_offensive_input(
 
     # truncation=True with no max_length: the bound is the tokenizer's own
     # `model_max_length`, which is the model's window in tokens. Deliberately not
-    # derived from the message-length limit, which is a count of characters — see
-    # the open issue on the prompt-injection classifier, which does exactly that.
-    scores = _all_scores(pipeline(text, top_k=None, truncation=True))
+    # derived from the message-length limit, which is a count of characters. The
+    # prompt-injection classifier used to do exactly that and no longer does —
+    # the two now agree, which is also what a common runner over both will need.
+    scores = normalize_scores(pipeline(text, top_k=None, truncation=True))
 
     total = 0.0
     dominant_label: str | None = None

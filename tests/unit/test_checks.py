@@ -690,3 +690,106 @@ class TestVerdictsAndCategories:
         # renaming both together — and renaming the settings field discards the
         # reply text an administrator edited in the admin panel.
         assert VERDICT_MESSAGE_LENGTH != "message_too_long"
+
+
+class TestPersonalDataSurvivesUnicodeAndSpacing:
+    """The privacy detectors must see what a reader sees.
+
+    They used to run on the raw text while the prompt-injection patterns ran on
+    a normalized copy, so the guard protecting the more sensitive value was the
+    weaker of the two: a fullwidth `＠`, or an ordinary space either side of the
+    `@`, delivered the address to the user and wrote `checks=email+…` in the log
+    as if it had been examined.
+    """
+
+    SPACED = "mario.rossi @ example.org"
+    TABBED = "mario.rossi\t@\texample.org"
+    FULLWIDTH = "mario.rossi＠example.org"
+    ZERO_WIDTH = "mario.ros​si@example.org"
+
+    @pytest.mark.parametrize(
+        "address",
+        [SPACED, TABBED, FULLWIDTH, ZERO_WIDTH],
+    )
+    def test_a_disguised_address_is_still_personal_data_on_input(self, address):
+        assert check_personal_data(
+            f"scrivetemi a {address} grazie", allowed_email=HELP_DESK
+        ) == VERDICT_PERSONAL_DATA
+
+    @pytest.mark.parametrize(
+        "address",
+        [SPACED, TABBED, FULLWIDTH, ZERO_WIDTH],
+    )
+    def test_a_disguised_address_is_still_stopped_on_output(self, address):
+        # The output stage is where this matters most: it is the last thing
+        # between a generated answer and the user reading it.
+        assert check_output_personal_data(
+            f"Puoi scrivere a {address} per assistenza.", allowed_email=HELP_DESK
+        ) == VERDICT_OUTPUT_PERSONAL_DATA
+
+    @pytest.mark.parametrize(
+        "written",
+        [
+            HELP_DESK,
+            "helpdesk @ example.org",
+            "helpdesk＠example.org",
+        ],
+    )
+    def test_an_allowed_contact_stays_exempt_however_it_is_spelled(self, written):
+        # Widening the pattern must not turn a public contact back into personal
+        # data as soon as someone spaces it out: the match is stripped of those
+        # spaces before the allowlist is consulted.
+        assert check_personal_data(
+            f"ho già scritto a {written}", allowed_email=HELP_DESK
+        ) is None
+
+    def test_a_public_contact_does_not_cover_a_personal_one_beside_it(self):
+        assert check_personal_data(
+            f"ho scritto a {HELP_DESK} e anche a {self.SPACED}",
+            allowed_email=HELP_DESK,
+        ) == VERDICT_PERSONAL_DATA
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            # The cost of tolerating spaces around the `@` is a wider false
+            # positive surface, so the shapes a help desk actually receives are
+            # pinned here. A regression on any of these refuses a legitimate
+            # question, which is how a guard gets switched off entirely.
+            "Il costo è 3 kg @ 2.50 euro al chilo.",
+            "Errore: connection refused @ port 8080.",
+            "Riunione @ aula magna alle 15.",
+            "Sconto del 20 % sul totale.",
+            "La pagina www.example.org non si carica.",
+            "Il server è raggiungibile su 192.168.1.10.",
+        ],
+    )
+    def test_benign_help_desk_text_with_an_at_sign_still_passes(self, message):
+        assert check_personal_data(message, allowed_email=HELP_DESK) is None
+
+    def test_the_format_character_class_covers_this_interpreter(self):
+        # `_FORMAT_CHARACTERS` is written out as an explicit class because
+        # filtering with `unicodedata.category()` costs a Python loop over every
+        # character of every message. The list is pinned against a newer Unicode
+        # than some supported interpreters ship, so it is a superset — what must
+        # never happen is a character this interpreter calls `Cf` being absent
+        # from it, because that is the bypass reopening in silence.
+        import unicodedata
+
+        missing = [
+            hex(code)
+            for code in range(0x110000)
+            if unicodedata.category(chr(code)) == "Cf"
+            and not checks._FORMAT_CHARACTERS.match(chr(code))
+        ]
+        assert missing == [], (
+            f"Unicode {unicodedata.unidata_version} classifies these as Cf but "
+            f"_FORMAT_CHARACTERS does not strip them: {missing}"
+        )
+
+    def test_normalization_does_not_reach_the_length_limit(self):
+        # The limit counts what the user actually sent. Folding the text first
+        # would let a message of invisible characters buy itself extra room.
+        message = "a" * 40 + "​" * 40
+        assert len(message) == 80
+        assert checks.check_length(message, max_chars=50) == VERDICT_MESSAGE_LENGTH

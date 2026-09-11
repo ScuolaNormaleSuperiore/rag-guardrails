@@ -168,6 +168,7 @@ documented, not defects.
 - [DOC/OutputGuards.md](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/OutputGuards.md): output-side privacy guard details
 - [DOC/Logging.md](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/Logging.md): detailed log reference, including the activation, active-guard and per-stage log lines
 - [DOC/TestingCode.md](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/TestingCode.md): test layout, runners and manual checks
+- [DOC/ReleaseReview.md](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/ReleaseReview.md): the facts a release review needs — what data the plugin touches, what reaches the logs, what leaves the machine
 - [DOC/Licenses.md](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/Licenses.md): the licence of the plugin and of every supported model
 - [DOC/RateLimiter.md](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/RateLimiter.md): sharing an installation with the Rate Limiter plugin
 

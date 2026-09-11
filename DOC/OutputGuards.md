@@ -36,6 +36,25 @@ input. The difference is not the detection logic, but the point in the flow,
 the fallback text shown to the user, and the fact that output detectors are now
 configured independently from input detectors.
 
+All four run on a Unicode-folded copy of the text: NFKC compatibility
+normalization, plus removal of the format characters — the invisible marks that
+carry no glyph and can sit inside a word. The e-mail pattern additionally
+tolerates up to three spaces or tabs on either side of the `@`.
+
+Both are there because the detectors used to read the raw text while the
+prompt-injection patterns read a normalized copy, which made the guard
+protecting the more sensitive value the weaker of the two: `mario.rossi @
+example.org` and the fullwidth `mario.rossi＠example.org` were delivered to the
+user, and the log recorded `checks=email+…` as though they had been examined.
+The fold is applied for matching only — the reply and the log keep working from
+the original text — and the match is stripped of those spaces before the
+allowlist below is consulted, so a public contact stays exempt however it is
+written.
+
+The tolerance has a price, and it is the intended direction for a privacy
+guard: `seguici @ comune.pisa` now matches. A false positive asks the user to
+rephrase; a false negative publishes an address.
+
 ### Contacts that are not personal data
 
 Two exemptions apply to the e-mail and phone detectors, on **both** stages.

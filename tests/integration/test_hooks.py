@@ -494,10 +494,9 @@ class TestPromptInjectionGuard:
         )
         captured = {}
 
-        def fake_classifier(text, model_name, threshold, max_length, token=None):
+        def fake_classifier(text, model_name, threshold, token=None):
             captured["model_name"] = model_name
             captured["threshold"] = threshold
-            captured["max_length"] = max_length
             captured["token"] = token
             return {"triggered": False, "label": "BENIGN", "score": 0.01}
 
@@ -507,30 +506,41 @@ class TestPromptInjectionGuard:
 
         assert captured["model_name"] == "meta-llama/Llama-Prompt-Guard-2-86M"
         assert captured["threshold"] == 0.85
-        assert captured["max_length"] == checks.DEFAULT_MAX_MESSAGE_CHARS
         assert captured["token"] is None
 
-    def test_classifier_receives_the_same_max_length_as_the_length_guard(
-        self, monkeypatch
+    @pytest.mark.parametrize("limit", [0, 321, 5000])
+    def test_the_classifier_is_not_bound_to_the_length_guard(
+        self, monkeypatch, limit
     ):
+        # The inverse of a test that used to pin the opposite. The hook fed the
+        # classifier the Limits guard's character limit as a **token** bound, so
+        # one guard silently reconfigured another: `0` — the value that disables
+        # the length check — requested no truncation at all, and a limit above
+        # the model's window made inference fail, which this guard turns into a
+        # silent fail-open. The bound is now the tokenizer's own, and nothing an
+        # administrator does to the Limits guard may change what this one sees.
         cat = make_cat(
             {
                 "detect_prompt_injection_custom": False,
                 "detect_prompt_injection_classifier": True,
-                "max_message_chars": 321,
+                "max_message_chars": limit,
             }
         )
         captured = {}
 
-        def fake_classifier(text, model_name, threshold, max_length, token=None):
-            captured["max_length"] = max_length
+        def fake_classifier(text, model_name, threshold, token=None):
+            captured["arguments"] = sorted(
+                (model_name, threshold, token), key=repr
+            )
             return {"triggered": False, "label": "BENIGN", "score": 0.01}
 
         monkeypatch.setattr(guards, "classify_prompt_injection", fake_classifier)
 
         send(cat, "This message reaches the classifier path")
 
-        assert captured["max_length"] == 321
+        assert captured["arguments"] == sorted(
+            ("meta-llama/Llama-Prompt-Guard-2-86M", 0.85, None), key=repr
+        )
 
     def test_hf_token_environment_takes_precedence_over_admin_setting(
         self, monkeypatch
@@ -544,7 +554,7 @@ class TestPromptInjectionGuard:
         )
         captured = {}
 
-        def fake_classifier(text, model_name, threshold, max_length, token=None):
+        def fake_classifier(text, model_name, threshold, token=None):
             captured["token"] = token
             return {"triggered": False, "label": "BENIGN", "score": 0.01}
 
@@ -569,7 +579,7 @@ class TestPromptInjectionGuard:
         )
         captured = {}
 
-        def fake_classifier(text, model_name, threshold, max_length, token=None):
+        def fake_classifier(text, model_name, threshold, token=None):
             captured["token"] = token
             return {"triggered": False, "label": "BENIGN", "score": 0.01}
 
@@ -590,7 +600,7 @@ class TestPromptInjectionGuard:
         )
         captured = {}
 
-        def fake_classifier(text, model_name, threshold, max_length, token=None):
+        def fake_classifier(text, model_name, threshold, token=None):
             captured["token"] = token
             return {"triggered": False, "label": "BENIGN", "score": 0.01}
 
@@ -612,7 +622,7 @@ class TestPromptInjectionGuard:
         )
         captured = {}
 
-        def fake_classifier(text, model_name, threshold, max_length, token=None):
+        def fake_classifier(text, model_name, threshold, token=None):
             captured["token"] = token
             return {"triggered": False, "label": "BENIGN", "score": 0.01}
 
@@ -1212,24 +1222,75 @@ class TestClassifierUnavailable:
         unavailable = [line for line in warnings if "classifier unavailable" in line]
         assert len(unavailable) == 2
 
+    def working_classifier(self, monkeypatch):
+        monkeypatch.setattr(
+            guards,
+            "classify_prompt_injection",
+            lambda *args, **kwargs: {
+                "triggered": False,
+                "label": "BENIGN",
+                "score": 0.01,
+            },
+        )
+
+    def allowed_line(self, infos):
+        allowed = [line for line in infos if "input allowed" in line]
+        assert len(allowed) == 1, f"expected one allowed line, got {allowed}"
+        return allowed[0]
+
     def test_an_unavailable_classifier_is_not_listed_among_the_checks(
         self, monkeypatch
     ):
-        # The INFO line is where per-turn coverage is recorded, so it must not
-        # claim a check that cannot run. Enabled explicitly: a classifier that
-        # ships disabled is not listed either, for a different and less
-        # interesting reason.
-        settings = settings_module.RagGuardrailsSettings(**self.ENABLED)
-        model = settings.prompt_injection_classifier_model.value
+        # The INFO line records the coverage of **one turn**, so it must name the
+        # checks that examined the message and not the ones the settings switch
+        # on. Asserted through the line the hook actually writes, rather than
+        # through a helper: the log is the contract, and the two used to disagree.
+        cat = make_cat(self.ENABLED)
+        infos = []
+        monkeypatch.setattr(guards.log, "info", infos.append)
 
-        assert "injection_classifier" in guards.enabled_check_names(settings)
+        self.working_classifier(monkeypatch)
+        send(cat, "Come attivo la VPN?")
+        assert "injection_classifier" in self.allowed_line(infos)
 
-        monkeypatch.setattr(
-            guards, "classifier_load_error", lambda name: "401 gated repo"
-        )
+        infos.clear()
+        self.broken_classifier(monkeypatch)
+        send(cat, "Come attivo la VPN?")
+        assert "injection_classifier" not in self.allowed_line(infos)
 
-        assert "injection_classifier" not in guards.enabled_check_names(settings)
-        assert model  # the name the lookup is keyed on
+    def test_a_transient_failure_is_not_counted_as_coverage_either(
+        self, monkeypatch
+    ):
+        # The regression this class exists for. A load that is still running
+        # somewhere else, which this request waited for and gave up on, raises
+        # `ClassifierUnavailable` **without** recording the model as failed —
+        # correctly, because the state is transient. Coverage used to be read
+        # from that same record, so on every cold start with concurrent traffic
+        # the line claimed a classifier that had examined nothing, while the
+        # deduplicated warning covered the whole window with a single entry.
+        cat = make_cat(self.ENABLED)
+        infos, warnings = [], []
+        monkeypatch.setattr(guards.log, "info", infos.append)
+        monkeypatch.setattr(guards.log, "warning", warnings.append)
+
+        def still_loading(*args, **kwargs):
+            raise runtime_module.ClassifierUnavailable(
+                "timed out waiting for another request to load classifier model"
+            )
+
+        monkeypatch.setattr(guards, "classify_prompt_injection", still_loading)
+
+        for _ in range(3):
+            send(cat, "Come attivo la VPN?")
+
+        allowed = [line for line in infos if "input allowed" in line]
+        assert len(allowed) == 3
+        assert all("injection_classifier" not in line for line in allowed)
+        # The deterministic checks did run, and the line must still say so.
+        assert all("injection_patterns" in line for line in allowed)
+        # One warning for three degraded turns is the deduplication working as
+        # designed, and the reason the allowed lines have to carry the truth.
+        assert len([w for w in warnings if "classifier unavailable" in w]) == 1
 
 
 class TestAllowedPathLogging:
@@ -1323,17 +1384,20 @@ class TestAllowedPathLogging:
             "input blocked" in line and "latency_ms=" in line for line in lines
         )
 
-    def test_disabled_checks_are_left_out_of_the_list(self):
-        settings = settings_module.RagGuardrailsSettings(
-            max_message_chars=0, detect_prompt_injection_classifier=False
+    def test_disabled_checks_are_left_out_of_the_list(self, monkeypatch):
+        cat = make_cat(
+            {"max_message_chars": 0, "detect_prompt_injection_classifier": False}
         )
+        infos = []
+        monkeypatch.setattr(guards.log, "info", infos.append)
 
-        names = guards.enabled_check_names(settings)
+        send(cat, "Come attivo la VPN?")
 
-        assert "length" not in names
-        assert "injection_classifier" not in names
-        assert "injection_patterns" in names
-        assert "personal_data" in names
+        line = next(line for line in infos if "input allowed" in line)
+        assert "length" not in line
+        assert "injection_classifier" not in line
+        assert "injection_patterns" in line
+        assert "personal_data" in line
 
 
 class TestOutputAllowedPathLogging:
@@ -1878,18 +1942,33 @@ class TestOffensiveInputGuard:
 
         assert all("molto riconoscibile" not in line for line in lines)
 
-    def test_it_is_listed_among_the_checks_that_covered_an_allowed_turn(self):
-        settings = settings_module.RagGuardrailsSettings(**self.ENABLED)
+    def test_it_is_listed_among_the_checks_that_covered_an_allowed_turn(
+        self, monkeypatch
+    ):
+        self.stub_classifier(monkeypatch, triggered=False)
+        infos = []
+        monkeypatch.setattr(guards.log, "info", infos.append)
 
-        assert "offensive_input" in guards.enabled_check_names(settings)
+        send(make_cat(self.ENABLED), "Come attivo la VPN?")
 
-    def test_a_model_that_failed_to_load_is_not_listed_as_coverage(self, monkeypatch):
-        monkeypatch.setattr(
-            guards, "classifier_load_error", lambda name: "401 gated repo"
-        )
-        settings = settings_module.RagGuardrailsSettings(**self.ENABLED)
+        line = next(line for line in infos if "input allowed" in line)
+        assert "offensive_input" in line
 
-        assert "offensive_input" not in guards.enabled_check_names(settings)
+    def test_a_model_that_could_not_run_is_not_listed_as_coverage(self, monkeypatch):
+        # Same rule as the prompt-injection classifier, and it matters more here:
+        # this guard has no deterministic half, so a line naming it as coverage
+        # when it did not run describes a stage that protected nothing at all.
+        def explode(*args, **kwargs):
+            raise OSError("401 Client Error: gated repo")
+
+        monkeypatch.setattr(guards, "classify_offensive_input", explode)
+        infos = []
+        monkeypatch.setattr(guards.log, "info", infos.append)
+
+        send(make_cat(self.ENABLED), "Come attivo la VPN?")
+
+        line = next(line for line in infos if "input allowed" in line)
+        assert "offensive_input" not in line
 
     def test_the_announcement_names_the_model_and_the_threshold_when_enabled(self):
         settings = settings_module.RagGuardrailsSettings(**self.ENABLED)

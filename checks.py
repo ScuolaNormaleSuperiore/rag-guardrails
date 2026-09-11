@@ -171,8 +171,18 @@ _PROMPT_INJECTION_PATTERNS = (
 # message cost thirteen seconds of CPU inside `fast_reply`, which is a denial of
 # service on the hook that runs before everything else. The bounds are the ones
 # RFC 5321 already imposes on a mailbox, so no legitimate address stops matching.
+# Spaces are tolerated around the `@`, because `mario.rossi @ example.org` is
+# an address a person reads as one and the detector used to read as none. Three
+# at most, and only spaces and tabs: a newline would let the pattern join two
+# unrelated lines into an address that was never written.
+#
+# The tolerance is what it costs to close the gap, and it is not free — `seguici
+# @ comune.pisa` now matches. That direction is the safe one for a privacy
+# guard: a false positive asks the user to rephrase, a false negative publishes
+# a personal address. The matched text is stripped of those spaces before the
+# allowlist is consulted, so a public contact stays exempt however it is spelled.
 _EMAIL_PATTERN = re.compile(
-    r"[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9.\-]{1,255}\.[A-Za-z]{2,24}"
+    r"[A-Za-z0-9._%+\-]{1,64}[ \t]{0,3}@[ \t]{0,3}[A-Za-z0-9.\-]{1,255}\.[A-Za-z]{2,24}"
 )
 
 # Six letters, two year digits, a month letter, two day digits, the four
@@ -238,6 +248,49 @@ def extract_text(message: Any) -> str:
     return getattr(message, "text", "") or getattr(message, "content", "") or ""
 
 
+# Every character Unicode classifies as a format character, category `Cf`:
+# invisible marks that carry no glyph and can sit inside a word without a reader
+# ever seeing them. A zero-width space inside `ignore` once defeated the
+# injection patterns, and the same trick sits just as well between the letters
+# of an e-mail address.
+#
+# Written as an explicit class rather than filtered through
+# `unicodedata.category()`, because that filter is a Python loop over every
+# character of every message: measured on a 1000-character message it costs
+# 0.152 ms against 0.021 ms for this regex, on a hot path whose whole
+# deterministic block costs 0.130 ms.
+#
+# The list is a *superset* of the `Cf` set of every Python this plugin supports
+# — 3.10 ships Unicode 14, 3.12 ships Unicode 15 — and that is the right
+# relation: stripping one character too many is harmless here, missing one
+# reopens a bypass. A test asserts that nothing the running interpreter calls
+# `Cf` is missing from it, so a future Unicode revision fails loudly.
+_FORMAT_CHARACTERS = re.compile(
+    "[­؀-؅؜۝܏࢐-࢑"
+    "࣢᠎​-‏‪-‮⁠-⁤⁦-⁯"
+    "﻿￹-￻"
+    "\U000110bd\U000110cd\U00013430-\U0001343f\U0001bca0-\U0001bca3"
+    "\U0001d173-\U0001d17a\U000e0001\U000e0020-\U000e007f]"
+)
+
+
+def normalize_unicode(text: str) -> str:
+    """Fold away the Unicode variations that hide a value from a detector.
+
+    NFKC maps compatibility forms onto their canonical ones, so the fullwidth
+    `＠` becomes `@`, and the format characters above are removed outright.
+    Both are cheap and safe here because the result is never sent anywhere: it
+    is only what the patterns run against, while the reply and the log keep
+    working from the original text.
+
+    Shared by every detector deliberately. This used to be applied to the
+    prompt-injection patterns alone, and that asymmetry was the whole of a
+    defect: the security guard saw through an invisible character while the
+    privacy guards, which protect the more sensitive value, did not.
+    """
+    return _FORMAT_CHARACTERS.sub("", unicodedata.normalize("NFKC", text))
+
+
 def category_of(verdict: str) -> str:
     """Return the family a verdict belongs to, for the log and the telemetry."""
     return CATEGORY_BY_VERDICT.get(verdict, UNCATEGORIZED)
@@ -267,16 +320,13 @@ def _normalize_for_prompt_injection(text: str) -> str:
     """Normalize free text for the conservative custom detector.
 
     The detector is phrase-based, not token-model based, so only cheap and
-    predictable normalization belongs here: NFKC compatibility normalization,
-    removal of Unicode format characters, lowercase and whitespace collapse.
+    predictable normalization belongs here: the shared Unicode folding above,
+    then lowercase and whitespace collapse. The last two are specific to this
+    detector — it matches phrases, so `Ignore  The Rules` and `ignore the
+    rules` must be one thing — and are deliberately not done for the personal
+    data detectors, which need the original spacing to stay where it is.
     """
-    normalized = unicodedata.normalize("NFKC", text)
-    stripped = "".join(
-        character
-        for character in normalized
-        if unicodedata.category(character) != "Cf"
-    )
-    return " ".join(stripped.casefold().split())
+    return " ".join(normalize_unicode(text).casefold().split())
 
 
 def matched_prompt_injection_pattern(
@@ -434,6 +484,7 @@ def found_phone_numbers(
     personal one still leaves the personal one in the result, so it still
     blocks.
     """
+    text = normalize_unicode(text)
     allowed = _allowed_phone_numbers(public_contacts, region)
     return tuple(
         match.raw_string
@@ -460,6 +511,7 @@ def phone_number_types(
     happened to sit in the same sentence. The log has to name the violation
     that occurred, not a wider one.
     """
+    text = normalize_unicode(text)
     allowed = _allowed_phone_numbers(public_contacts, region)
     return tuple(
         _PHONE_TYPE_NAMES.get(phonenumbers.number_type(match.number), "unknown")
@@ -487,9 +539,33 @@ def matched_personal_data_kinds(
     """
     matched = []
 
-    if detect_email:
+    # Once, at the top, and then every detector works on the same string. The
+    # phone helpers below normalize again on their own, because they are called
+    # directly from the log path too and must not depend on who called them;
+    # the fold is idempotent and costs hundredths of a millisecond.
+    text = normalize_unicode(text)
+
+    # The `in` test before the scan is not a micro-optimisation, it is what pays
+    # for the spaces the pattern now tolerates. Those optional runs on both sides
+    # of the `@` multiply the attempts the engine makes at every word boundary,
+    # and an Italian sentence is almost entirely local-part characters: the scan
+    # went from 0.024 ms to 0.091 ms on a 1000-character message. A help-desk
+    # message usually contains no `@` at all, and this substring search is a C
+    # level scan, so the common case now costs less than it did before.
+    #
+    # It is safe because the pattern cannot match without a literal `@`, and the
+    # text reaching here is already NFKC-folded, so a fullwidth `＠` has become
+    # one by this point.
+    if detect_email and "@" in text:
         allowed = _allowed_email_addresses(allowed_email, public_contacts)
-        found = _EMAIL_PATTERN.findall(text)
+        # The spaces the pattern now tolerates are removed before comparing:
+        # `helpdesk @ example.org` has to match the allowlist entry written
+        # without them, or widening the pattern would turn every public contact
+        # back into personal data as soon as someone spaced it out.
+        found = [
+            address.replace(" ", "").replace("\t", "")
+            for address in _EMAIL_PATTERN.findall(text)
+        ]
         # The configured Help Desk address, and any address listed as a public
         # service contact, are not personal data: a user writing "I already
         # emailed helpdesk@..." must not be refused, and neither must a model

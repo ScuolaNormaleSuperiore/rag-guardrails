@@ -43,6 +43,7 @@ conversation history.
 
 import os
 import time
+from typing import NamedTuple
 
 from cat.log import log
 from cat.mad_hatter.decorators import hook, plugin
@@ -74,7 +75,7 @@ try:
         run_input_checks,
         stage_of,
     )
-    from .classifier_runtime import classifier_load_error, redact_secrets
+    from .classifier_runtime import redact_secrets
     from .offensive_input_classifier import classify_offensive_input
     from .prompt_injection_classifier import classify_prompt_injection
     from .settings import RagGuardrailsSettings
@@ -101,7 +102,7 @@ except ImportError:  # pragma: no cover - depends on how the module is loaded
         run_input_checks,
         stage_of,
     )
-    from classifier_runtime import classifier_load_error, redact_secrets
+    from classifier_runtime import redact_secrets
     from offensive_input_classifier import classify_offensive_input
     from prompt_injection_classifier import classify_prompt_injection
     from settings import RagGuardrailsSettings
@@ -114,6 +115,30 @@ except ImportError:  # pragma: no cover - depends on how the module is loaded
 # carrier between two hooks, and it is now the trace the telemetry module will
 # read instead of parsing log lines.
 VERDICT_ATTRIBUTE = "ict_guard_verdict"
+
+
+class ClassifierOutcome(NamedTuple):
+    """What a classifier adapter reports back about one message.
+
+    Two facts, deliberately kept apart, because a single `None` used to carry
+    three different meanings — the guard is switched off, the model could not
+    run, the message was clean — and the caller could not tell a check that
+    cleared a message from one that never saw it. That ambiguity is what let the
+    `input allowed` line name a classifier which had not examined anything.
+
+    `ran` answers «did this check look at the message», and it is what the log
+    line is built from. `detail` is the context of a block, and stays `None` on
+    every path that does not block.
+    """
+
+    ran: bool
+    detail: str | None = None
+
+
+# The outcome of a guard that is switched off, and of one whose model could not
+# be reached. They are the same fact from the turn's point of view: nothing
+# examined this message.
+DID_NOT_RUN = ClassifierOutcome(ran=False)
 
 # Runs after every other plugin on `fast_reply`. The Rate Limiter plugin uses
 # the default priority of 1, and core plugin hooks use 0; a negative value is
@@ -259,11 +284,24 @@ def output_privacy_checks_enabled(settings: RagGuardrailsSettings) -> tuple[str,
     )
 
 
-def enabled_check_names(settings: RagGuardrailsSettings) -> tuple[str, ...]:
-    """Which input checks are effectively active, in the order they run.
+def deterministic_check_names(settings: RagGuardrailsSettings) -> tuple[str, ...]:
+    """Which deterministic input checks are active, in the order they run.
 
     A check whose configuration disables it — a non-positive length limit, all
     four privacy detectors off — is not listed, because it decides nothing.
+
+    Only these three can be answered from the settings alone, and that is the
+    whole reason this function stops here. When one of them is enabled it runs,
+    every time, and it cannot fail: pattern matching has no model to load. The
+    two classifier checks have both failure modes — a load that failed, and a
+    load still in progress that this turn gave up waiting for — so whether they
+    covered a turn is a fact about that turn, not about the configuration. The
+    hook appends them to the log line only when they report having examined the
+    message.
+
+    Deriving all five from the settings is what used to make `input allowed`
+    claim `injection_classifier` on every turn of a cold start, while a single
+    deduplicated warning covered the whole degraded window.
     """
     names = []
     if settings.max_message_chars > 0:
@@ -272,20 +310,6 @@ def enabled_check_names(settings: RagGuardrailsSettings) -> tuple[str, ...]:
         names.append("injection_patterns")
     if enabled_privacy_detectors(settings):
         names.append("personal_data")
-    if settings.detect_prompt_injection_classifier and not classifier_load_error(
-        settings.prompt_injection_classifier_model.value
-    ):
-        # Last on purpose: it runs only when every deterministic check passed.
-        # Enabled in the settings is not enough — a model that failed to load is
-        # not covering anything, and listing it would make the line claim a
-        # coverage the turn did not have.
-        names.append("injection_classifier")
-    if settings.detect_offensive_input_classifier and not classifier_load_error(
-        settings.offensive_input_classifier_model.value
-    ):
-        # After the injection classifier, matching the order they run in. Same
-        # rule as above: a model that failed to load is not covering anything.
-        names.append("offensive_input")
     return tuple(names)
 
 
@@ -567,10 +591,10 @@ def announce_classifier_failure(
 
 def detect_prompt_injection_with_classifier(
     text: str, settings: RagGuardrailsSettings
-) -> dict[str, str | float] | None:
+) -> ClassifierOutcome:
     """Run the local prompt-injection classifier, fail-open on any error."""
     if not settings.detect_prompt_injection_classifier:
-        return None
+        return DID_NOT_RUN
 
     model_name = settings.prompt_injection_classifier_model.value
     token = resolve_huggingface_token(settings)
@@ -581,19 +605,24 @@ def detect_prompt_injection_with_classifier(
             text,
             model_name=model_name,
             threshold=settings.prompt_injection_classifier_threshold,
-            max_length=settings.max_message_chars,
             token=token,
         )
     except Exception as error:
+        # Every reason this can fail lands here and means the same thing for the
+        # turn: the message was not examined. A model that failed to load
+        # earlier, a load still running that this request gave up waiting for, a
+        # response shape the decision rule cannot read — the guard stays open and
+        # says so, rather than counting itself as coverage.
         announce_classifier_failure(error, settings)
-        return None
+        return DID_NOT_RUN
 
     elapsed_ms = (time.perf_counter() - started) * 1000
     if not result["triggered"]:
-        return None
+        return ClassifierOutcome(ran=True)
 
-    return {
-        "detail": (
+    return ClassifierOutcome(
+        ran=True,
+        detail=(
             ", detector=classifier"
             f", model={model_name}"
             f", label={result['label']}"
@@ -601,7 +630,7 @@ def detect_prompt_injection_with_classifier(
             f", threshold={settings.prompt_injection_classifier_threshold:.2f}"
             f", latency_ms={elapsed_ms:.1f}"
         ),
-    }
+    )
 
 
 def announce_offensive_classifier_failure(
@@ -636,7 +665,7 @@ def announce_offensive_classifier_failure(
 
 def detect_offensive_input(
     text: str, settings: RagGuardrailsSettings
-) -> dict[str, str | float] | None:
+) -> ClassifierOutcome:
     """Run the local offensive-input classifier, fail-open on any error.
 
     Last of the input checks, so it runs only on a message every other one let
@@ -645,7 +674,7 @@ def detect_offensive_input(
     hook that runs before retrieval.
     """
     if not settings.detect_offensive_input_classifier:
-        return None
+        return DID_NOT_RUN
 
     model_name = settings.offensive_input_classifier_model.value
     token = resolve_huggingface_token(settings)
@@ -660,17 +689,18 @@ def detect_offensive_input(
         )
     except Exception as error:
         announce_offensive_classifier_failure(error, settings)
-        return None
+        return DID_NOT_RUN
 
     elapsed_ms = (time.perf_counter() - started) * 1000
     if not result["triggered"]:
-        return None
+        return ClassifierOutcome(ran=True)
 
     # `label` is the strongest blocking class, `score` the sum of all of them:
     # without both, a refusal at 0.9 would not say whether the model saw an
     # insult or a threat, and the sum alone names no behaviour.
-    return {
-        "detail": (
+    return ClassifierOutcome(
+        ran=True,
+        detail=(
             ", detector=classifier"
             f", model={model_name}"
             f", label={result['label']}"
@@ -678,7 +708,7 @@ def detect_offensive_input(
             f", threshold={settings.offensive_input_classifier_threshold:.2f}"
             f", latency_ms={elapsed_ms:.1f}"
         ),
-    }
+    )
 
 
 # The environment variables Hugging Face itself honours, in its own order of
@@ -734,21 +764,30 @@ def guard_input_message(fast_reply, cat):
     verdict = run_input_checks(text, settings)
     detail = blocked_detail(verdict, text, settings) if verdict is not None else ""
 
+    # Accumulated as the turn goes, not derived from the settings afterwards.
+    # The three deterministic checks are settled by the configuration alone; the
+    # two classifiers earn their place only by reporting that they looked.
+    checks_that_ran = list(deterministic_check_names(settings))
+
     if verdict is None:
-        classifier_result = detect_prompt_injection_with_classifier(text, settings)
-        if classifier_result is not None:
+        injection = detect_prompt_injection_with_classifier(text, settings)
+        if injection.ran:
+            checks_that_ran.append("injection_classifier")
+        if injection.detail is not None:
             verdict = VERDICT_PROMPT_INJECTION
-            detail = classifier_result["detail"]
+            detail = injection.detail
 
     if verdict is None:
         # Last, and the order decides one thing worth knowing: a message that is
         # both offensive and an injection attempt is reported as
         # `prompt_injection`, because an attack on the assistant is the more
         # pertinent correction to give back.
-        offensive_result = detect_offensive_input(text, settings)
-        if offensive_result is not None:
+        offensive = detect_offensive_input(text, settings)
+        if offensive.ran:
+            checks_that_ran.append("offensive_input")
+        if offensive.detail is not None:
             verdict = VERDICT_OFFENSIVE_INPUT
-            detail = offensive_result["detail"]
+            detail = offensive.detail
 
     elapsed_ms = (time.perf_counter() - started) * 1000
 
@@ -763,7 +802,7 @@ def guard_input_message(fast_reply, cat):
         log.info(
             f"[rag-guardrails] input allowed, "
             f"stage='{STAGE_INPUT}', "
-            f"checks={'+'.join(enabled_check_names(settings)) or 'none'}, "
+            f"checks={'+'.join(checks_that_ran) or 'none'}, "
             f"latency_ms={elapsed_ms:.2f}"
         )
         return fast_reply

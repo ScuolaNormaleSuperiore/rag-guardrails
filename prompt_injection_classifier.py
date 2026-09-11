@@ -17,6 +17,7 @@ try:
         classifier_load_error,
         get_pipeline,
         model_labels,
+        normalize_scores,
         runtime_log,
     )
 except ImportError:  # pragma: no cover - depends on how the module is loaded
@@ -25,6 +26,7 @@ except ImportError:  # pragma: no cover - depends on how the module is loaded
         classifier_load_error,
         get_pipeline,
         model_labels,
+        normalize_scores,
         runtime_log,
     )
 
@@ -90,7 +92,6 @@ def classify_prompt_injection(
     text: str,
     model_name: str = DEFAULT_PROMPT_INJECTION_CLASSIFIER_MODEL,
     threshold: float = 0.85,
-    max_length: int | None = None,
     token: str | None = None,
 ) -> dict[str, str | float | bool | None]:
     """Classify a message and decide whether it must be blocked.
@@ -102,17 +103,34 @@ def classify_prompt_injection(
         return {"triggered": False, "label": None, "score": 0.0}
 
     expected_label = PROMPT_INJECTION_CLASSIFIER_LABELS[model_name]
-    pipeline_kwargs = {}
-    if max_length is not None and max_length > 0:
-        pipeline_kwargs["truncation"] = True
-        pipeline_kwargs["max_length"] = max_length
 
     pipeline = get_pipeline(model_name, token=token)
     _warn_on_label_mismatch(model_name, pipeline)
 
-    result = pipeline(text, **pipeline_kwargs)
-    top = result[0] if isinstance(result, list) else result
+    # `truncation=True` with no `max_length`, the same as the offensive-input
+    # classifier: the bound is the tokenizer's own `model_max_length`, which is
+    # the model's window and is therefore always the right number whichever
+    # model is configured.
+    #
+    # This used to take a `max_length` the hook filled in from the Limits guard's
+    # character limit — two different units, and an accidental coupling between
+    # two guards an administrator configures separately. Setting that limit to
+    # `0` to disable the length check requested no truncation at all, and raising
+    # it past the model's window made inference fail, which this guard turns into
+    # a silent fail-open. Neither is a thing the Limits guard should be able to do.
+    #
+    # The response goes through the shared normalizer rather than being indexed
+    # directly. This used to be `result[0] if isinstance(result, list) else
+    # result`, which reads the common shape and breaks on the other two
+    # `transformers` produces: a list containing one list of dicts raised
+    # `AttributeError`, an empty response raised `IndexError`. Both failed open,
+    # correctly, but the guard then reported itself as *unavailable* — a load or
+    # token problem — when what had actually changed was the library version.
+    scores = normalize_scores(pipeline(text, truncation=True))
+    if not scores:
+        return {"triggered": False, "label": None, "score": 0.0}
 
+    top = scores[0]
     label = str(top.get("label", "")).strip().upper()
     score = float(top.get("score", 0.0) or 0.0)
     return {

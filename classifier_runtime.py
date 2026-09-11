@@ -246,6 +246,35 @@ def get_pipeline(model_name: str, token: str | None = None, **pipeline_kwargs):
         load_lock.release()
 
 
+def normalize_scores(result) -> list[dict]:
+    """Normalize what a pipeline returned into one flat list of score dicts.
+
+    `transformers` has returned a dict, a list of dicts, and a list containing
+    one list of dicts, across versions and arguments. Which of the three arrives
+    depends on the installed version and on whether `top_k` was asked for, and
+    `requirements.txt` declares `transformers>=4.55` with no upper bound by
+    policy — so the shape is not something this plugin can pin down, only
+    something it has to absorb.
+
+    It lives here rather than in either classifier because both need it and only
+    one used to have it: the prompt-injection classifier indexed the raw result
+    directly, so the list-of-lists shape raised `AttributeError` and an empty
+    response raised `IndexError`. Neither reached the user — the hook catches
+    everything and fails open — but the guard went quiet and reported itself as
+    *unavailable*, which points whoever reads the log at a loading or token
+    problem instead of at a library upgrade.
+
+    An empty list is returned as an empty list, deliberately, and the callers
+    read it as «decided nothing» rather than raising. A working model does not
+    produce it.
+    """
+    if isinstance(result, dict):
+        return [result]
+    if result and isinstance(result[0], list):
+        return list(result[0])
+    return list(result)
+
+
 def model_labels(pipeline) -> tuple[str, ...]:
     """The labels a loaded model can actually return, in index order.
 
