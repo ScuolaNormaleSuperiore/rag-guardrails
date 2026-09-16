@@ -75,7 +75,12 @@ try:
         run_input_checks,
         stage_of,
     )
-    from .classifier_runtime import redact_secrets
+    from .classifier_runtime import (
+        classifier_load_error,
+        classifier_stack_status,
+        redact_secrets,
+        stack_remediation,
+    )
     from .offensive_input_classifier import classify_offensive_input
     from .prompt_injection_classifier import classify_prompt_injection
     from .settings import RagGuardrailsSettings
@@ -102,7 +107,12 @@ except ImportError:  # pragma: no cover - depends on how the module is loaded
         run_input_checks,
         stage_of,
     )
-    from classifier_runtime import redact_secrets
+    from classifier_runtime import (
+        classifier_load_error,
+        classifier_stack_status,
+        redact_secrets,
+        stack_remediation,
+    )
     from offensive_input_classifier import classify_offensive_input
     from prompt_injection_classifier import classify_prompt_injection
     from settings import RagGuardrailsSettings
@@ -158,6 +168,12 @@ INPUT_GUARD_PRIORITY = -1
 # announcement does not follow it.
 #
 # When the tone guard's default flips to enabled, add it here in the same change.
+#
+# This tuple is not the only route into `uncovered`. A category the
+# administrator switched **on** and that cannot run — a classifier guard on an
+# image with no optional stack — is reported whatever its default, because that
+# is a broken request rather than a deliberate omission. See
+# `active_guards_summary`.
 CATEGORIES_ENABLED_BY_DEFAULT = (
     CATEGORY_LIMITS,
     CATEGORY_PRIVACY,
@@ -392,25 +408,63 @@ def active_guards_summary(
     else:
         privacy = f"{CATEGORY_PRIVACY}(disabled)"
 
+    # A classifier toggle says what an administrator asked for; it does not say
+    # what the process can run. With the optional stack absent, or with a model
+    # whose load already failed, an enabled toggle covers nothing — and this line
+    # is read as the answer to «what is protecting this instance», so reporting
+    # the toggle alone made it lie in exactly the case that matters.
+    stack = classifier_stack_status()
+
+    def classifier_state(model_name: str) -> str:
+        """How a configured classifier should be described, or why it cannot run."""
+        if not stack.available:
+            return f"stack not installed: missing={stack.describe_missing()}"
+        if classifier_load_error(model_name) is not None:
+            return "unavailable"
+        return ""
+
     mechanisms = []
     if settings.detect_prompt_injection_custom:
         mechanisms.append("patterns")
+
+    injection_classifier_runs = False
     if settings.detect_prompt_injection_classifier:
-        mechanisms.append(
-            f"classifier {settings.prompt_injection_classifier_model.value}"
-            f"@{settings.prompt_injection_classifier_threshold:.2f}"
-        )
+        injection_model = settings.prompt_injection_classifier_model.value
+        unusable = classifier_state(injection_model)
+        if unusable:
+            mechanisms.append(f"classifier({unusable})")
+        else:
+            injection_classifier_runs = True
+            mechanisms.append(
+                f"classifier {injection_model}"
+                f"@{settings.prompt_injection_classifier_threshold:.2f}"
+            )
+
     if mechanisms:
         security = f"{CATEGORY_SECURITY}({'+'.join(mechanisms)})"
     else:
         security = f"{CATEGORY_SECURITY}(disabled)"
 
+    # Coverage, not configuration: the patterns are a real deterministic
+    # mechanism, so `security` survives a classifier that cannot start. `tone`
+    # has no deterministic half, so it does not.
+    security_covered = settings.detect_prompt_injection_custom or (
+        injection_classifier_runs
+    )
+
+    tone_covered = False
     if settings.detect_offensive_input_classifier:
-        tone = (
-            f"{CATEGORY_TONE}(classifier "
-            f"{settings.offensive_input_classifier_model.value}"
-            f"@{settings.offensive_input_classifier_threshold:.2f})"
-        )
+        offensive_model = settings.offensive_input_classifier_model.value
+        unusable = classifier_state(offensive_model)
+        if unusable:
+            tone = f"{CATEGORY_TONE}(classifier({unusable}))"
+        else:
+            tone_covered = True
+            tone = (
+                f"{CATEGORY_TONE}(classifier "
+                f"{offensive_model}"
+                f"@{settings.offensive_input_classifier_threshold:.2f})"
+            )
     else:
         tone = f"{CATEGORY_TONE}(disabled)"
 
@@ -438,20 +492,34 @@ def active_guards_summary(
         privacy_coverage = ((CATEGORY_PRIVACY, CATEGORY_PRIVACY, False),)
 
     coverage = (
-        (CATEGORY_LIMITS, CATEGORY_LIMITS, settings.max_message_chars > 0),
-        *privacy_coverage,
-        (CATEGORY_SECURITY, CATEGORY_SECURITY, bool(mechanisms)),
+        (CATEGORY_LIMITS, CATEGORY_LIMITS, settings.max_message_chars > 0, False),
+        *(
+            (label, category, covered, False)
+            for label, category, covered in privacy_coverage
+        ),
+        (CATEGORY_SECURITY, CATEGORY_SECURITY, security_covered, False),
         (
             CATEGORY_TONE,
             CATEGORY_TONE,
+            tone_covered,
+            # Requested but unable to run: the administrator ticked the box and
+            # the process cannot honour it. That is a different fact from a
+            # category deliberately left off, and the only one of the two that
+            # deserves to raise the severity of this announcement.
             settings.detect_offensive_input_classifier,
         ),
     )
 
+    # Two ways to be reported as uncovered, and keeping them apart is the point.
+    # A category that *ships* enabled and has been switched off is a deviation
+    # from the shipped protection. A category the administrator switched **on**
+    # and that cannot run is a broken request, whatever its default. Only the
+    # first test existed, so a tone guard enabled on an image with no classifier
+    # stack reported itself as covered.
     uncovered = tuple(
         label
-        for label, category, covered in coverage
-        if not covered and category in CATEGORIES_ENABLED_BY_DEFAULT
+        for label, category, covered, requested in coverage
+        if not covered and (category in CATEGORIES_ENABLED_BY_DEFAULT or requested)
     )
 
     return f"{limits}, {privacy}, {security}, {tone}", uncovered
@@ -629,10 +697,15 @@ def announce_classifier_failure(
             "disabled too"
         )
 
+    # The remedy comes from `classifier_runtime`, which owns the one copy of it.
+    # Both classifier adapters call the same function deliberately: they are
+    # already near-identical and an open issue asks to collapse them into one
+    # runner, so a second copy of this sentence would be the exact duplication
+    # that issue exists to remove.
     log.warning(
         f"[rag-guardrails] prompt-injection classifier unavailable "
         f"({reported}), continuing without blocking; {remaining}. "
-        "Not repeated until the plugin reloads"
+        f"Not repeated until the plugin reloads.{stack_remediation(error)}"
     )
 
 
@@ -702,11 +775,13 @@ def announce_offensive_classifier_failure(
         return
     _ANNOUNCED_OFFENSIVE_CLASSIFIER_FAILURE = reported
 
+    # Same shared remedy as the prompt-injection announcement; see the comment
+    # there for why it is not written out twice.
     log.warning(
         f"[rag-guardrails] offensive-input classifier unavailable "
         f"({reported}), continuing without blocking; no guard covers: "
         f"{CATEGORY_TONE} — this check has no deterministic fallback. "
-        "Not repeated until the plugin reloads"
+        f"Not repeated until the plugin reloads.{stack_remediation(error)}"
     )
 
 
@@ -955,9 +1030,95 @@ def activated(plugin):
     they change; duplicating it at activation would report a configuration that
     can be edited a moment later, and would need `settings.json` to exist
     already.
+
+    The optional classifier stack **is** announced here, and that is not a
+    contradiction of the rule above: the two lines differ by volatility. The
+    guard configuration changes whenever somebody saves the admin panel, so a
+    line written once at activation would go stale. The stack cannot change
+    without rebuilding the image and restarting the process, so activation is
+    the only moment it needs stating, and the state it reports is true for the
+    whole life of the process.
+
+    The settings are read here only to choose the severity of that line — an
+    absent stack is a normal configuration when both classifiers are off, and a
+    degraded service when one is on. They are never used to describe the
+    configuration, which remains `guards active`'s job. That read is safe at
+    this point: the core creates `settings.json` from the model before invoking
+    this override (`cat/mad_hatter/plugin.py:84-91`), so the «file missing» case
+    cannot arise. The `try` is still there for a corrupted file and for a model
+    that fails to validate.
     """
     log.info(
         "[rag-guardrails] plugin activated, guardrails registered: "
         f"fast_reply(priority={INPUT_GUARD_PRIORITY}) for the input stage, "
         "before_cat_sends_message for the output stage"
     )
+    announce_classifier_stack(plugin)
+
+
+def announce_classifier_stack(plugin) -> None:
+    """Say once whether the optional classifier stack is installed.
+
+    Purely diagnostic: it changes no setting, disables no hook, installs
+    nothing and raises nothing. A plugin whose classifier stack is missing is a
+    working plugin with its deterministic guards intact, and the one thing that
+    must never happen here is an exception that turns a supported configuration
+    into a failed activation.
+
+    The severity carries the whole message. `INFO` when no classifier is
+    enabled: nothing is degraded and the line is there to answer «could this
+    instance run a classifier if I switched one on». `WARNING` when one is
+    enabled: the administrator asked for a control the process cannot provide,
+    and the guard will fail open on every message.
+
+    A complete stack is announced too, with the installed versions. Silence
+    would be cheaper and worse: the core matches requirements by package name
+    only and ignores the version, so the `transformers>=4.50,<5` bound in the
+    optional requirements is silently skipped on an image that already carries a
+    5.x. This line is the only place that breach becomes visible without opening
+    a shell on the host.
+    """
+    # `find_spec`, never an import: reporting that Torch is absent must not be
+    # the thing that loads Torch, and on an image that has it the activation
+    # would pay hundreds of megabytes of resident memory for a diagnostic.
+    status = classifier_stack_status()
+
+    if status.available:
+        log.info(
+            "[rag-guardrails] optional classifier stack installed, "
+            f"{status.describe_versions()}"
+        )
+        return
+
+    missing = status.describe_missing()
+    try:
+        settings = RagGuardrailsSettings.model_validate(plugin.load_settings() or {})
+        classifiers_enabled = (
+            settings.detect_prompt_injection_classifier
+            or settings.detect_offensive_input_classifier
+        )
+    except Exception as error:
+        # The stack is genuinely absent and the toggles are unknown, which is
+        # the one case that has to be reported as a warning without claiming
+        # either outcome.
+        log.warning(
+            "[rag-guardrails] optional classifier stack not installed, "
+            f"missing={missing}; the state of the classifier toggles could not "
+            f"be determined ({redact_secrets(str(error))}), so whether any "
+            "classifier guard is affected is unknown; deterministic guards "
+            f"remain available.{stack_remediation()}"
+        )
+        return
+
+    if classifiers_enabled:
+        log.warning(
+            "[rag-guardrails] optional classifier stack not installed, "
+            f"missing={missing}; enabled classifier guards will fail open, "
+            f"deterministic guards remain available.{stack_remediation()}"
+        )
+    else:
+        log.info(
+            "[rag-guardrails] optional classifier stack not installed, "
+            f"missing={missing}; classifier guards are disabled, deterministic "
+            "guards remain available"
+        )

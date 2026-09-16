@@ -276,7 +276,7 @@ class RagGuardrailsSettings(BaseModel):
     detect_prompt_injection_classifier: bool = Field(
         default=False,
         title="Security guard: block prompt injection with local classifier",
-        description="Run the selected local classifier after the deterministic injection patterns.",
+        description="Run the selected local classifier after the deterministic injection patterns. Needs the optional classifier stack in the image.",
     )
 
     prompt_injection_classifier_model: PromptInjectionClassifierModel = Field(
@@ -309,7 +309,7 @@ class RagGuardrailsSettings(BaseModel):
     detect_offensive_input_classifier: bool = Field(
         default=False,
         title="Tone guard: block offensive incoming messages",
-        description="Run a local classifier to block offensive or violent incoming messages.",
+        description="Block offensive or violent incoming messages with a local classifier. Needs the optional classifier stack in the image.",
     )
 
     offensive_input_classifier_model: OffensiveInputClassifierModel = Field(

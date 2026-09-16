@@ -55,9 +55,11 @@ def reset_classifier_caches():
     """
     runtime_module._CLASSIFIER_PIPELINES.clear()
     runtime_module._FAILED_CLASSIFIER_MODELS.clear()
+    runtime_module._CLASSIFIER_STACK_STATUS = None
     yield
     runtime_module._CLASSIFIER_PIPELINES.clear()
     runtime_module._FAILED_CLASSIFIER_MODELS.clear()
+    runtime_module._CLASSIFIER_STACK_STATUS = None
 
 # The @hook decorator replaces the function with a CatHook object, so the
 # callable under test is reached through `.function`.
@@ -2090,3 +2092,425 @@ class TestOffensiveInputSettings:
         assert settings.offensive_input_classifier_threshold == (
             shipped.offensive_input_classifier_threshold
         )
+
+
+def force_stack(monkeypatch, missing=(), versions=None):
+    """Make the optional-stack probe answer a fixed state in both modules.
+
+    Patched in `rag_guardrails` *and* in `classifier_runtime`: the hook layer
+    imported the function by name, so rebinding only the runtime would leave the
+    summary reading the real environment. That is the difference between a test
+    that asserts the code and one that asserts what the container happens to
+    have installed.
+    """
+    versions = versions or {"torch": "2.7.1", "transformers": "4.50.3"}
+    status = runtime_module.ClassifierStackStatus(
+        available=not missing,
+        missing=tuple(missing),
+        versions={} if missing else versions,
+    )
+    monkeypatch.setattr(guards, "classifier_stack_status", lambda: status)
+    monkeypatch.setattr(runtime_module, "classifier_stack_status", lambda: status)
+    return status
+
+
+def make_plugin(stored_settings=None):
+    """A stand-in for the core `Plugin` object handed to `activated`."""
+    if stored_settings is None:
+        return object()
+    return types.SimpleNamespace(load_settings=lambda: stored_settings)
+
+
+CLASSIFIERS_ON = {
+    "detect_prompt_injection_classifier": True,
+    "detect_offensive_input_classifier": True,
+}
+
+
+class TestOptionalStackAnnouncement:
+    """What activation says about a stack the core no longer installs.
+
+    The line exists because the absence is silent otherwise: a classifier guard
+    switched on in the panel looks enabled everywhere — in the settings, in the
+    admin form, in the guard summary — and only fails when a message arrives.
+    """
+
+    def test_a_missing_stack_with_no_classifier_enabled_is_information(
+        self, monkeypatch
+    ):
+        # Nothing is degraded: the guards that ship enabled are all
+        # deterministic. A warning here would fire on every default installation
+        # and train everyone to ignore the line.
+        force_stack(monkeypatch, missing=("torch", "transformers"))
+        infos, warnings = [], []
+        monkeypatch.setattr(guards.log, "info", infos.append)
+        monkeypatch.setattr(guards.log, "warning", warnings.append)
+
+        guards.activated.function(make_plugin({}))
+
+        line = next(line for line in infos if "optional classifier stack" in line)
+        assert "missing=torch+transformers" in line
+        assert "deterministic guards remain available" in line
+        assert warnings == []
+
+    @pytest.mark.parametrize(
+        "enabled",
+        [
+            {"detect_prompt_injection_classifier": True},
+            {"detect_offensive_input_classifier": True},
+            CLASSIFIERS_ON,
+        ],
+    )
+    def test_a_missing_stack_with_a_classifier_enabled_is_a_warning(
+        self, monkeypatch, enabled
+    ):
+        # The administrator asked for a control the process cannot provide, and
+        # the guard will fail open on every message. That is the one case where
+        # the severity has to rise above the normal flow.
+        force_stack(monkeypatch, missing=("torch",))
+        warnings = []
+        monkeypatch.setattr(guards.log, "warning", warnings.append)
+
+        guards.activated.function(make_plugin(dict(enabled)))
+
+        line = next(line for line in warnings if "optional classifier stack" in line)
+        assert "missing=torch" in line
+        assert "fail open" in line
+
+    def test_the_missing_list_names_exactly_what_is_absent(self, monkeypatch):
+        # Half a stack is a different problem from none of it, and `missing=` is
+        # a log field somebody greps.
+        force_stack(monkeypatch, missing=("transformers",))
+        infos = []
+        monkeypatch.setattr(guards.log, "info", infos.append)
+
+        guards.activated.function(make_plugin({}))
+
+        line = next(line for line in infos if "optional classifier stack" in line)
+        assert "missing=transformers" in line
+        assert "torch" not in line.split("missing=")[1].split(";")[0]
+
+    def test_a_complete_stack_reports_the_installed_versions(self, monkeypatch):
+        # Not silence, deliberately. The core matches requirements by package
+        # name and ignores the version, so the `<5` bound in the optional file is
+        # skipped on an image that already carries a 5.x — and this line is the
+        # only place that becomes visible.
+        force_stack(monkeypatch, versions={"torch": "2.7.1", "transformers": "4.50.3"})
+        infos = []
+        monkeypatch.setattr(guards.log, "info", infos.append)
+
+        guards.activated.function(make_plugin({}))
+
+        line = next(line for line in infos if "optional classifier stack" in line)
+        assert "installed" in line
+        assert "torch=2.7.1" in line
+        assert "transformers=4.50.3" in line
+
+    def test_a_settings_read_that_raises_still_activates(self, monkeypatch):
+        # Diagnostic code must never be the thing that fails an activation: the
+        # plugin with an unreadable settings file is still a plugin whose
+        # deterministic guards work.
+        force_stack(monkeypatch, missing=("torch", "transformers"))
+
+        def exploding_load_settings():
+            raise OSError("settings.json is not readable")
+
+        warnings = []
+        monkeypatch.setattr(guards.log, "warning", warnings.append)
+
+        guards.activated.function(
+            types.SimpleNamespace(load_settings=exploding_load_settings)
+        )
+
+        line = next(line for line in warnings if "optional classifier stack" in line)
+        assert "could not be determined" in line
+
+    def test_the_hooks_are_still_registered_when_the_stack_is_absent(
+        self, monkeypatch
+    ):
+        # The whole point of fail-open: an absent optional dependency is a
+        # supported configuration, not a broken installation.
+        force_stack(monkeypatch, missing=("torch", "transformers"))
+        infos = []
+        monkeypatch.setattr(guards.log, "info", infos.append)
+
+        guards.activated.function(make_plugin(CLASSIFIERS_ON))
+
+        assert any("plugin activated" in line for line in infos)
+
+    def test_the_remedy_is_given_only_where_somebody_needs_it(self, monkeypatch):
+        # Install instructions belong to the case where a control was asked for
+        # and cannot run. On an installation that never wanted a classifier the
+        # same sentence is advice to install a gigabyte of dependencies nobody
+        # requested, in a line that is otherwise a one-line statement of fact.
+        force_stack(monkeypatch, missing=("torch", "transformers"))
+        infos, warnings = [], []
+        monkeypatch.setattr(guards.log, "info", infos.append)
+        monkeypatch.setattr(guards.log, "warning", warnings.append)
+
+        guards.activated.function(make_plugin({}))
+        guards.activated.function(make_plugin(CLASSIFIERS_ON))
+
+        without = next(line for line in infos if "optional classifier stack" in line)
+        with_request = next(
+            line for line in warnings if "optional classifier stack" in line
+        )
+        assert "requirements-classifiers-torch-cpu.txt" not in without
+        assert "requirements-classifiers-torch-cpu.txt" in with_request
+
+
+class TestSummaryReportsRealCoverage:
+    """The guard summary must describe what can run, not what was configured.
+
+    Built from the settings alone, it claimed a classifier on an image that
+    cannot load one — and it is read as the answer to «what is protecting this
+    instance», which is exactly the question an absent stack changes.
+    """
+
+    def settings_with(self, **overrides):
+        return settings_module.RagGuardrailsSettings(**overrides)
+
+    def test_an_absent_stack_is_named_in_place_of_the_model(self, monkeypatch):
+        force_stack(monkeypatch, missing=("torch", "transformers"))
+        settings = self.settings_with(detect_offensive_input_classifier=True)
+
+        summary, _ = guards.active_guards_summary(settings)
+
+        assert "stack not installed: missing=torch+transformers" in summary
+
+    def test_patterns_still_cover_security_without_the_stack(self, monkeypatch):
+        # The deterministic half is real coverage: an absent classifier degrades
+        # the security guard, it does not remove it.
+        force_stack(monkeypatch, missing=("torch",))
+        settings = self.settings_with(
+            detect_prompt_injection_custom=True,
+            detect_prompt_injection_classifier=True,
+        )
+
+        summary, uncovered = guards.active_guards_summary(settings)
+
+        assert "patterns" in summary
+        assert checks.CATEGORY_SECURITY not in uncovered
+
+    def test_security_is_uncovered_when_the_patterns_are_off_too(self, monkeypatch):
+        force_stack(monkeypatch, missing=("torch",))
+        settings = self.settings_with(
+            detect_prompt_injection_custom=False,
+            detect_prompt_injection_classifier=True,
+        )
+
+        _, uncovered = guards.active_guards_summary(settings)
+
+        assert checks.CATEGORY_SECURITY in uncovered
+
+    def test_tone_is_uncovered_without_the_stack(self, monkeypatch):
+        # `tone` has no deterministic half, so an enabled toggle it cannot run
+        # covers nothing at all.
+        force_stack(monkeypatch, missing=("torch", "transformers"))
+        settings = self.settings_with(detect_offensive_input_classifier=True)
+
+        _, uncovered = guards.active_guards_summary(settings)
+
+        assert checks.CATEGORY_TONE in uncovered
+
+    def test_a_present_stack_reports_model_and_threshold(self, monkeypatch):
+        force_stack(monkeypatch)
+        settings = self.settings_with(detect_offensive_input_classifier=True)
+
+        summary, uncovered = guards.active_guards_summary(settings)
+
+        assert settings.offensive_input_classifier_model.value in summary
+        assert checks.CATEGORY_TONE not in uncovered
+
+    def test_a_model_in_the_negative_cache_reports_unavailable(self, monkeypatch):
+        # The stack is installed and this particular model failed: a different
+        # state and a different word, because installing the stack again is not
+        # the fix.
+        force_stack(monkeypatch)
+        settings = self.settings_with(detect_offensive_input_classifier=True)
+        model = settings.offensive_input_classifier_model.value
+        runtime_module._FAILED_CLASSIFIER_MODELS[model] = "gated repo"
+
+        summary, uncovered = guards.active_guards_summary(settings)
+
+        assert "classifier(unavailable)" in summary
+        assert checks.CATEGORY_TONE in uncovered
+
+    def test_a_failed_injection_model_leaves_the_patterns_covering(self, monkeypatch):
+        force_stack(monkeypatch)
+        settings = self.settings_with(
+            detect_prompt_injection_custom=True,
+            detect_prompt_injection_classifier=True,
+        )
+        model = settings.prompt_injection_classifier_model.value
+        runtime_module._FAILED_CLASSIFIER_MODELS[model] = "gated repo"
+
+        summary, uncovered = guards.active_guards_summary(settings)
+
+        assert "classifier(unavailable)" in summary
+        assert checks.CATEGORY_SECURITY not in uncovered
+
+    def test_a_disabled_classifier_says_nothing_about_the_stack(self, monkeypatch):
+        # The shipped configuration: both toggles off. An absent stack is not a
+        # fact about a guard nobody asked for.
+        force_stack(monkeypatch, missing=("torch", "transformers"))
+        settings = self.settings_with()
+
+        summary, _ = guards.active_guards_summary(settings)
+
+        assert "stack not installed" not in summary
+        assert f"{checks.CATEGORY_TONE}(disabled)" in summary
+
+    def test_the_deterministic_guards_are_unchanged_without_the_stack(
+        self, monkeypatch
+    ):
+        force_stack(monkeypatch, missing=("torch", "transformers"))
+        settings = self.settings_with()
+
+        summary, uncovered = guards.active_guards_summary(settings)
+
+        assert f"{checks.CATEGORY_LIMITS}(max " in summary
+        assert checks.CATEGORY_LIMITS not in uncovered
+        assert checks.CATEGORY_PRIVACY not in uncovered
+
+
+class TestTurnsSurviveAnAbsentStack:
+    """A missing optional dependency must cost coverage, never the turn."""
+
+    def test_a_deterministic_refusal_still_happens(self, monkeypatch):
+        force_stack(monkeypatch, missing=("torch", "transformers"))
+        cat = make_cat({"max_message_chars": 10, **CLASSIFIERS_ON})
+
+        reply = send(cat, "x" * 50)
+
+        assert reply is not None
+        assert verdict_of(cat) == checks.VERDICT_MESSAGE_LENGTH
+
+    def test_a_legitimate_message_passes_through(self, monkeypatch):
+        force_stack(monkeypatch, missing=("torch", "transformers"))
+        cat = make_cat(dict(CLASSIFIERS_ON))
+
+        assert send(cat, "How do I activate the VPN?") == {}
+
+    def test_a_classifier_that_cannot_run_is_not_named_among_the_checks(
+        self, monkeypatch
+    ):
+        # `input allowed` names the checks that covered the turn. A guard whose
+        # module is not installed did not examine the message, so naming it would
+        # make the log report coverage that does not exist.
+        force_stack(monkeypatch, missing=("torch", "transformers"))
+
+        def no_stack(*args, **kwargs):
+            raise ModuleNotFoundError("No module named 'transformers'")
+
+        monkeypatch.setattr(guards, "classify_prompt_injection", no_stack)
+        monkeypatch.setattr(guards, "classify_offensive_input", no_stack)
+        infos = []
+        monkeypatch.setattr(guards.log, "info", infos.append)
+        cat = make_cat(dict(CLASSIFIERS_ON))
+
+        assert send(cat, "How do I activate the VPN?") == {}
+
+        line = next(line for line in infos if "input allowed" in line)
+        assert "classifier" not in line
+
+    def test_a_failing_classifier_does_not_stop_the_later_checks(
+        self, monkeypatch
+    ):
+        # The prompt-injection classifier runs before the offensive-input one.
+        # With the stack absent the first one fails, and the second must still be
+        # attempted rather than skipped as a side effect of the first failing.
+        force_stack(monkeypatch, missing=("torch", "transformers"))
+        reached = []
+
+        def no_stack(*args, **kwargs):
+            reached.append("injection")
+            raise ModuleNotFoundError("No module named 'transformers'")
+
+        def also_no_stack(*args, **kwargs):
+            reached.append("offensive")
+            raise ModuleNotFoundError("No module named 'transformers'")
+
+        monkeypatch.setattr(guards, "classify_prompt_injection", no_stack)
+        monkeypatch.setattr(guards, "classify_offensive_input", also_no_stack)
+        cat = make_cat(dict(CLASSIFIERS_ON))
+
+        assert send(cat, "How do I activate the VPN?") == {}
+        assert reached == ["injection", "offensive"]
+
+    def test_the_failure_warning_is_not_repeated_every_turn(self, monkeypatch):
+        # The stack cannot appear without restarting the process, so the state is
+        # constant and repeating it per message buries the log exactly when a
+        # configuration problem needs diagnosing.
+        force_stack(monkeypatch, missing=("torch", "transformers"))
+        guards._ANNOUNCED_CLASSIFIER_FAILURE = None
+        guards._ANNOUNCED_OFFENSIVE_CLASSIFIER_FAILURE = None
+
+        def no_stack(*args, **kwargs):
+            raise ModuleNotFoundError("No module named 'transformers'")
+
+        monkeypatch.setattr(guards, "classify_prompt_injection", no_stack)
+        monkeypatch.setattr(guards, "classify_offensive_input", no_stack)
+        warnings = []
+        monkeypatch.setattr(guards.log, "warning", warnings.append)
+        cat = make_cat(dict(CLASSIFIERS_ON))
+
+        for _ in range(4):
+            send(cat, "How do I activate the VPN?")
+
+        unavailable = [line for line in warnings if "classifier unavailable" in line]
+        assert len(unavailable) == 2
+
+    def test_the_failure_warning_carries_the_install_remedy(self, monkeypatch):
+        force_stack(monkeypatch, missing=("torch", "transformers"))
+        guards._ANNOUNCED_CLASSIFIER_FAILURE = None
+        guards._ANNOUNCED_OFFENSIVE_CLASSIFIER_FAILURE = None
+
+        def no_stack(*args, **kwargs):
+            raise ModuleNotFoundError("No module named 'transformers'")
+
+        monkeypatch.setattr(guards, "classify_prompt_injection", no_stack)
+        monkeypatch.setattr(guards, "classify_offensive_input", no_stack)
+        warnings = []
+        monkeypatch.setattr(guards.log, "warning", warnings.append)
+        cat = make_cat(dict(CLASSIFIERS_ON))
+
+        send(cat, "How do I activate the VPN?")
+
+        unavailable = [line for line in warnings if "classifier unavailable" in line]
+        assert unavailable
+        assert all(
+            "requirements-classifiers-torch-cpu.txt" in line for line in unavailable
+        )
+
+
+class TestClassifierSettingsDescriptions:
+    def test_both_toggles_mention_the_optional_stack(self):
+        # The admin panel cannot verify the stack when the box is ticked, so the
+        # description is the only immediate warning an administrator gets; the
+        # logs confirm the state at the first message.
+        fields = settings_module.RagGuardrailsSettings.model_fields
+
+        for name in (
+            "detect_prompt_injection_classifier",
+            "detect_offensive_input_classifier",
+        ):
+            assert "optional classifier stack" in fields[name].description
+
+    def test_the_descriptions_still_fit_the_panel(self):
+        # The same 140-character cap the whole schema is held to: the settings
+        # page grew a horizontal scrollbar once already.
+        fields = settings_module.RagGuardrailsSettings.model_fields
+
+        for name in (
+            "detect_prompt_injection_classifier",
+            "detect_offensive_input_classifier",
+        ):
+            assert len(fields[name].description) <= 140
+
+    def test_neither_toggle_ships_enabled(self):
+        # The migration must not change what a fresh installation does.
+        defaults = settings_module.RagGuardrailsSettings()
+
+        assert defaults.detect_prompt_injection_classifier is False
+        assert defaults.detect_offensive_input_classifier is False

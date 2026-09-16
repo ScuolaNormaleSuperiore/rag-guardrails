@@ -43,6 +43,12 @@ INCLUDED_FILES = (
     "SECURITY.md",
     "LICENSE",
     "requirements.txt",
+    # Shipped but never read by the core, which only ever opens the file named
+    # exactly `requirements.txt`. They are in the package because the commands
+    # in README.md install them from the plugin directory, so an image build has
+    # to find them where the plugin was unpacked.
+    "requirements-classifiers-torch-cpu.txt",
+    "requirements-classifiers.txt",
     "checks.py",
     "classifier_runtime.py",
     "prompt_injection_classifier.py",

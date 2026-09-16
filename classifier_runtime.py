@@ -17,13 +17,24 @@ inside `get_pipeline()`. Nothing here decides whether a message is blocked: that
 belongs to the classifier modules, because the decision rule differs between
 them — one label against a threshold for prompt injection, a sum of labels for
 offensive input.
+
+`torch` and `transformers` are **optional**: the core installs neither, and an
+image built without them runs every deterministic guard unchanged. That is why
+`classifier_stack_status()` exists and why it answers with `find_spec()` rather
+than with an import — the callers are an activation and a guard summary, and
+neither may pull hundreds of megabytes into the process just to report that the
+stack is absent. The absence is a supported configuration, so it is reported and
+never raised.
 """
 
 from __future__ import annotations
 
+import importlib.metadata
+import importlib.util
 import logging
 import re
 import threading
+from dataclasses import dataclass
 from typing import Any
 
 try:
@@ -57,6 +68,209 @@ _FAILED_CLASSIFIER_MODELS: dict[str, str] = {}
 
 class ClassifierUnavailable(RuntimeError):
     """A model that already failed to load and is not being retried."""
+
+
+# The two packages the classifier guards need and the deterministic guards do
+# not. They are installed by the image rather than by the core, so their absence
+# is a normal configuration and not a broken installation.
+CLASSIFIER_STACK_PACKAGES = ("torch", "transformers")
+
+UNKNOWN_VERSION = "unknown"
+
+
+@dataclass(frozen=True)
+class ClassifierStackStatus:
+    """Which of the optional packages are importable, and at which version.
+
+    Deliberately says *findable*, not *working*: it is built from
+    `importlib.util.find_spec()`, which locates a module without executing it.
+    A package that is present but broken looks available here and fails at the
+    real import, which is why `get_pipeline()` keeps its own failure path.
+
+    `versions` carries an entry only for a package that was found, and
+    `UNKNOWN_VERSION` when the distribution metadata cannot be read.
+    """
+
+    available: bool
+    missing: tuple[str, ...]
+    versions: dict[str, str]
+
+    def describe_missing(self) -> str:
+        """The missing packages as one stable field value, or an empty string."""
+        return "+".join(self.missing)
+
+    def describe_versions(self) -> str:
+        """The packages that were found, as `name=version` pairs."""
+        return ", ".join(
+            f"{name}={self.versions[name]}"
+            for name in CLASSIFIER_STACK_PACKAGES
+            if name in self.versions
+        )
+
+
+def _package_version(package: str) -> str:
+    """The installed version of `package`, read without importing it.
+
+    `importlib.metadata.version()` reads the distribution metadata from disk, so
+    it costs nothing and — this is the point — does not pull Torch into the
+    process. Reporting the version must never become a reason to load the very
+    stack this module exists to keep optional.
+    """
+    try:
+        return importlib.metadata.version(package)
+    except Exception:
+        # A package can be importable with no distribution metadata: installed
+        # from a source tree, vendored, or shadowed by a directory on the path.
+        # Not knowing the version is not a failure.
+        return UNKNOWN_VERSION
+
+
+# The probe result, computed once per process. See `classifier_stack_status()`
+# for why caching it is not an optimisation but a correctness matter for the
+# per-message path. Tests reset it the way they reset the pipeline caches.
+_CLASSIFIER_STACK_STATUS: ClassifierStackStatus | None = None
+
+
+def classifier_stack_status() -> ClassifierStackStatus:
+    """Whether the optional classifier stack is present, without importing it.
+
+    Called at activation and by the guard summary, and the guard summary runs on
+    **every message**: `announce_active_guards()` is the first thing
+    `guard_input_message` does. That is why the result is cached.
+
+    An earlier version of this docstring claimed the per-message path never
+    reached here and used that to argue against a cache. It was wrong in both
+    halves. Measured in the container with the stack present, one uncached call
+    costs **19.9 ms** — 3.7 ms for the two `find_spec()` lookups and 16.6 ms for
+    the two `importlib.metadata.version()` reads — against roughly 0.1 ms for
+    every deterministic check together and 0.27 ms for the settings read. That
+    put two hundred times the cost of the guards themselves in front of every
+    turn, inside the hook that runs before anything else.
+
+    Caching needs no invalidation story, which is the other half of the earlier
+    reasoning that does not survive contact with the facts: installing the stack
+    means rebuilding the image and restarting the process, and a restart clears
+    this along with everything else in the module. It is the settings that
+    change under a running process, not the interpreter's packages.
+
+    The import is still never performed: loading Torch costs hundreds of
+    megabytes of resident memory, and doing it to find out whether Torch is
+    installed would defeat the whole point of making it optional.
+    """
+    global _CLASSIFIER_STACK_STATUS
+
+    if _CLASSIFIER_STACK_STATUS is None:
+        _CLASSIFIER_STACK_STATUS = _probe_classifier_stack()
+    return _CLASSIFIER_STACK_STATUS
+
+
+def _probe_classifier_stack() -> ClassifierStackStatus:
+    """Look the two packages up on the path. The uncached half of the above."""
+    missing = []
+    versions = {}
+    for package in CLASSIFIER_STACK_PACKAGES:
+        try:
+            found = importlib.util.find_spec(package) is not None
+        except Exception:
+            # `find_spec()` raises rather than returning None for a package
+            # whose parent cannot be imported, and for some broken
+            # installations. Treated as missing: the guard cannot run either
+            # way, and this function must not be the thing that raises during
+            # activation.
+            found = False
+        if found:
+            versions[package] = _package_version(package)
+        else:
+            missing.append(package)
+
+    return ClassifierStackStatus(
+        available=not missing,
+        missing=tuple(missing),
+        versions=versions,
+    )
+
+
+# What the log says when a classifier cannot run because the optional stack was
+# never installed. Deliberately free of any absolute or deployment-specific
+# path: the log says which state the process is in and names the two files, the
+# README carries the commands.
+STACK_INSTALL_REMEDIATION = (
+    " The optional classifier stack is not installed. Install it into the image "
+    "from the plugin directory, first "
+    "requirements-classifiers-torch-cpu.txt and then "
+    "requirements-classifiers.txt, and restart the core; see README.md, section "
+    "*The optional classifier stack*. The deterministic guards do not need it "
+    "and are unaffected."
+)
+
+# What the log says when both packages are findable and the import failed
+# anyway. A different sentence on purpose: telling somebody to install what they
+# already installed sends them after the wrong problem.
+STACK_BROKEN_REMEDIATION = (
+    " Both torch and transformers are installed but the import failed, so the "
+    "stack is broken or mutually incompatible rather than absent. Check the "
+    "versions against README.md, section *The optional classifier stack*, and "
+    "rebuild the image; installing again over the current environment is not "
+    "the fix."
+)
+
+
+def stack_remediation(error: Exception | str | None = None) -> str:
+    """Instructions when a classifier failed because of the optional stack.
+
+    Empty when the stack is complete and the failure looks like anything else,
+    which keeps it composable with `access_remediation()`: each one speaks only
+    for the cause it recognises, and a load that failed for a third reason gets
+    neither instead of both.
+
+    `error` is optional and only refines the wording. On a complete stack the
+    question is not «was this an import error» but «was it an import error about
+    *this* stack», and the difference is the whole value of the split: some
+    models need a package neither of ours pulls in — `sentencepiece` and
+    `protobuf` are the usual ones — and a `ModuleNotFoundError` naming one of
+    those is fixed by installing it. Answering that with «the stack is broken,
+    rebuild the image, installing again is not the fix» is precisely the
+    wrong-problem misdirection these two messages exist to avoid.
+
+    So the missing module is compared against the two packages we own, and
+    anything else gets no stack advice at all rather than the wrong one.
+    """
+    status = classifier_stack_status()
+    if not status.available:
+        return STACK_INSTALL_REMEDIATION
+
+    if error is None:
+        return ""
+
+    missing_module = _missing_module_name(error)
+    if missing_module in CLASSIFIER_STACK_PACKAGES:
+        return STACK_BROKEN_REMEDIATION
+
+    return ""
+
+
+# `No module named 'transformers.utils'` — the quoted name, dotted path and all.
+_MISSING_MODULE = re.compile(r"no module named '([^']+)'", re.IGNORECASE)
+
+
+def _missing_module_name(error: Exception | str) -> str | None:
+    """The top-level package a `ModuleNotFoundError` is about, or None.
+
+    `ImportError.name` is the reliable source and is read first. The text is
+    parsed only as a fallback, because callers hand this function the redacted
+    *string* of an exception as often as the exception itself, and by then the
+    attribute is gone.
+
+    The top level alone is what the caller compares, so `transformers.utils`
+    answers `transformers`: a submodule that cannot be imported is a fact about
+    the package that owns it.
+    """
+    name = getattr(error, "name", None)
+    if not name:
+        found = _MISSING_MODULE.search(str(error))
+        name = found.group(1) if found else None
+
+    return name.split(".")[0] if name else None
 
 
 REDACTED = "***redacted***"
@@ -139,6 +353,58 @@ def classifier_load_error(model_name: str) -> str | None:
     return _FAILED_CLASSIFIER_MODELS.get(model_name)
 
 
+_IMPORTED_VERSIONS_ANNOUNCED = False
+
+
+def _log_imported_stack_versions() -> None:
+    """Report the versions actually imported, once per process.
+
+    This is not the same fact as the one announced at activation, and the
+    difference is the reason both lines exist. Activation reports what the
+    *distribution metadata* says is installed, read without importing anything.
+    This reports what the interpreter actually imported. They normally agree and
+    can diverge — an installation overwritten by hand, a shadowing directory on
+    the path — and when they do, only this line is the truth the classifier ran
+    against.
+
+    It also matters because of a core behaviour documented in
+    `DEV/AGENTS/PROJECT.md`: requirements are matched by package *name* only, so
+    the `transformers>=4.50,<5` upper bound in the optional requirements file is
+    silently skipped on an image that already carries a 5.x. Nothing in the
+    plugin can enforce that bound; this line is what makes a breach visible.
+
+    Never raises and never blocks a load: a version that cannot be read is worth
+    less than the pipeline that just loaded successfully.
+
+    The flag is set **after** the line is written, not before. Setting it first
+    is the ordinary way to write a once-per-process guard and it is wrong here:
+    a single failure would then suppress the line for the life of the process,
+    and this line is the only place where a `transformers` outside the range the
+    optional requirements declare becomes visible. Announcing once means once
+    *successfully*, so a later load gets another chance.
+    """
+    global _IMPORTED_VERSIONS_ANNOUNCED
+    if _IMPORTED_VERSIONS_ANNOUNCED:
+        return
+
+    try:
+        import torch
+        import transformers
+
+        runtime_log.info(
+            "[rag-guardrails] optional classifier stack imported, "
+            f"transformers={getattr(transformers, '__version__', UNKNOWN_VERSION)}, "
+            f"torch={getattr(torch, '__version__', UNKNOWN_VERSION)}"
+        )
+    except Exception:
+        # Reachable in practice through a stubbed pipeline, which is how the
+        # tests load one: the fake module satisfies the pipeline call without
+        # `torch` being importable at all.
+        return
+
+    _IMPORTED_VERSIONS_ANNOUNCED = True
+
+
 def _classifier_load_lock(model_name: str):
     """Return the single load lock assigned to `model_name`."""
     with _CLASSIFIER_LOAD_LOCKS_GUARD:
@@ -209,14 +475,24 @@ def get_pipeline(model_name: str, token: str | None = None, **pipeline_kwargs):
         if previous_error is not None:
             raise ClassifierUnavailable(previous_error)
 
-        from transformers import pipeline as transformers_pipeline
-
         runtime_log.info(
             "[rag-guardrails] loading classifier model "
             f"{model_name} into memory; Transformers will use the local Hugging Face "
             "cache when available and download missing files if needed"
         )
         try:
+            # The import is inside this `try`, deliberately, and it used to be
+            # outside it. Transformers is an optional dependency now: on an image
+            # built without the classifier stack this line raises
+            # `ModuleNotFoundError`, and outside the `try` that failure bypassed
+            # the negative cache entirely — so every single message retried the
+            # import, took the load lock and paid the wait, for a package that
+            # cannot appear without restarting the process. Inside it, the stack
+            # is declared missing once and every later turn fails open
+            # immediately, which is the same contract as a model that cannot be
+            # downloaded.
+            from transformers import pipeline as transformers_pipeline
+
             pipeline = transformers_pipeline(
                 "text-classification",
                 model=model_name,
@@ -233,9 +509,11 @@ def get_pipeline(model_name: str, token: str | None = None, **pipeline_kwargs):
                 "[rag-guardrails] failed to load classifier "
                 f"model {model_name}: {reason}; it will not be retried until the "
                 f"plugin reloads.{access_remediation(model_name, error)}"
+                f"{stack_remediation(error)}"
             )
             raise
 
+        _log_imported_stack_versions()
         runtime_log.info(
             "[rag-guardrails] classifier model "
             f"{model_name} loaded and cached in memory"
@@ -251,10 +529,17 @@ def normalize_scores(result) -> list[dict]:
 
     `transformers` has returned a dict, a list of dicts, and a list containing
     one list of dicts, across versions and arguments. Which of the three arrives
-    depends on the installed version and on whether `top_k` was asked for, and
-    `requirements.txt` declares `transformers>=4.55` with no upper bound by
-    policy — so the shape is not something this plugin can pin down, only
-    something it has to absorb.
+    depends on the installed version and on whether `top_k` was asked for, so the
+    shape is not something this plugin can pin down, only something it has to
+    absorb.
+
+    The optional requirements declare `transformers>=4.50,<5`, and that upper
+    bound does **not** make the shape predictable — it exists for the transitive
+    dependencies, because the 5.x chain replaces `huggingface-hub` and
+    `tokenizers`, which the core uses for its embedders. The three shapes above
+    all occur inside the 4.x line, and the bound is in any case unenforceable:
+    the core matches requirements by package name only, so an image that already
+    carries a 5.x keeps it. This function stays necessary either way.
 
     It lives here rather than in either classifier because both need it and only
     one used to have it: the prompt-injection classifier indexed the raw result

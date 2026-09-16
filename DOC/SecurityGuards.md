@@ -227,11 +227,22 @@ run must not appear as coverage.
 
 ### Dependency model
 
-The classifier introduces explicit runtime dependencies declared in
-`requirements.txt`.
+The classifier needs `torch` and `transformers`, and they are **not** declared
+in `requirements.txt`. They are installed into the image from
+`requirements-classifiers-torch-cpu.txt` and `requirements-classifiers.txt`, by
+the deployment that decides to use a classifier guard. The commands and their
+order are in `README.md`, section *The optional classifier stack*.
 
-This is intentional. The plugin must not depend on libraries that happen to be
-installed only because another plugin shares the same Cheshire Cat instance.
+Two rules survive that move unchanged. The plugin must never depend on a library
+that happens to be installed because another plugin shares the instance — which
+is why the absence is probed explicitly, with `classifier_stack_status()`, and
+reported at activation rather than discovered on a user's message. And the
+plugin never runs `pip`: enabling a classifier in the admin panel installs
+nothing, so a toggle switched on without the stack in the image fails open and
+says so.
+
+`phonenumberslite` stays an automatic requirement, because `checks.py` imports
+it at module level and the deterministic privacy guards cannot run without it.
 
 ### Logging and measurement
 

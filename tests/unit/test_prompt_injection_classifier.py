@@ -246,12 +246,17 @@ class TestClassifyPromptInjection:
 class TestPipelineResponseShapes:
     """`transformers` returns three shapes, and this guard used to read one.
 
-    Which one arrives depends on the installed version and on the arguments, and
-    `requirements.txt` declares `transformers>=4.55` with no upper bound by
-    policy — so the shape is something to absorb, not something to pin down. The
-    decision rule broke on two of the three, failed open, and announced itself as
+    Which one arrives depends on the installed version and on the arguments, so
+    the shape is something to absorb, not something to pin down. The decision
+    rule broke on two of the three, failed open, and announced itself as
     *classifier unavailable*, pointing whoever read the log at a loading or token
     problem instead of at a library upgrade.
+
+    The `<5` bound in `requirements-classifiers.txt` does not retire these cases.
+    It guards the transitive dependencies shared with the core, not the response
+    shape: all three shapes occur inside the 4.x line, and the core matches
+    requirements by name only, so the bound cannot be enforced on an image that
+    already carries a 5.x.
     """
 
     MODEL = "meta-llama/Llama-Prompt-Guard-2-86M"

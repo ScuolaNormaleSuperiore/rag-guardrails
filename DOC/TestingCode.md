@@ -47,7 +47,9 @@ python -m pip install pytest phonenumberslite
 
 `phonenumberslite` is there because `checks.py` imports it at module level: the personal-data guard validates phone numbers against a numbering plan rather than matching a shape. Without it `tests/unit` fails at import, loudly, which is the wanted outcome: a guard whose behaviour depends on what happens to be installed is worse than one that refuses to start.
 
-It is not the plugin's only runtime dependency — `requirements.txt` also declares `transformers` and `torch` for the optional local classifiers, and the core installs all three on activation. **They are deliberately absent from the command above**, and that is not an oversight: both `prompt_injection_classifier.py` and `offensive_input_classifier.py` import `transformers` lazily, inside `_get_pipeline()`, so nothing under `tests/unit` touches it — the classifier tests exercise the decision logic around a stubbed pipeline. Adding `torch` to a local install would cost gigabytes and buy nothing. If a future test needs the real pipeline it belongs in `tests/integration/`, where the container already has it.
+It is the only package the core installs. `torch` and `transformers` are the **optional classifier stack**: they are declared in `requirements-classifiers-torch-cpu.txt` and `requirements-classifiers.txt`, which the core never reads, and a deployment installs them into its image only when it uses a classifier guard. See `README.md`, section *The optional classifier stack*.
+
+Neither is needed to run the tests, and that is a property of the suite rather than a limitation of it. Both classifier modules import `transformers` lazily, inside `get_pipeline()`, so nothing under `tests/unit` touches it — the classifier tests exercise the decision logic around a stubbed pipeline, and the tests for the stack probe monkeypatch `find_spec` rather than reading the environment. That last point is what makes them meaningful: they give the same answer on a developer machine with no Torch and inside the container where Torch is installed, instead of asserting whatever the runner happens to have.
 
 Container, whole suite:
 
@@ -144,6 +146,47 @@ involved in choosing that output: the model obeyed an instruction. Its preceding
 `input allowed` line is indistinguishable from the one before a normal answer,
 which is precisely why *how often the recall comes back empty* is an open issue
 and not something the log already answers.
+
+### Manual check for the optional classifier stack
+
+The plugin now runs in two environments that behave differently on purpose, and
+only a real image proves which one a deployment has.
+
+**Image without the stack** — the default, and what a fresh installation gets:
+
+1. confirm the plugin is activated and both hooks are registered;
+2. confirm the activation log carries
+   `optional classifier stack not installed, missing=torch+transformers`, at
+   `INFO` with both classifier toggles off;
+3. send one message per deterministic guard — over-long, personal data,
+   injection pattern, and a clean question — and confirm every one behaves
+   exactly as it does with the stack present;
+4. enable a classifier guard in the panel, send a message, and confirm the turn
+   survives: a single deduplicated `classifier unavailable` warning carrying the
+   install instructions, a `guards active` line naming the missing stack, and a
+   normal answer;
+5. confirm that warning is **not** repeated on the following messages;
+6. run `pip check`, and confirm no `nvidia-*`, `cuda-*` or `triton` package was
+   introduced by this plugin.
+
+**Image with the CPU stack**, after running the two install commands during the
+build:
+
+1. `pip check` is clean;
+2. `torch.version.cuda is None` — this is what proves the CPU index was used;
+3. the activation log reports `optional classifier stack installed` with the
+   versions, and they are inside the ranges the optional files declare;
+4. document ingestion and declarative recall still work, which is what a
+   replaced `huggingface-hub` or `tokenizers` would break;
+5. each classifier family loads a model and the label mapping and thresholds are
+   unchanged on the documented samples;
+6. every deterministic guard still behaves as above;
+7. the full suite passes with no skips.
+
+Record downloaded bytes, installed size and Docker layer size separately, and
+take them on images **built from scratch**: the core installs dependencies and
+never removes them, so a before/after comparison on an accumulated environment
+measures nothing.
 
 ### Manual check still outstanding: the tone guard
 

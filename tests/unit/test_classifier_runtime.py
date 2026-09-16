@@ -38,11 +38,15 @@ def reset_classifier_caches():
     """
     runtime._CLASSIFIER_PIPELINES.clear()
     runtime._FAILED_CLASSIFIER_MODELS.clear()
+    runtime._CLASSIFIER_STACK_STATUS = None
+    runtime._IMPORTED_VERSIONS_ANNOUNCED = False
     with runtime._CLASSIFIER_LOAD_LOCKS_GUARD:
         runtime._CLASSIFIER_LOAD_LOCKS.clear()
     yield
     runtime._CLASSIFIER_PIPELINES.clear()
     runtime._FAILED_CLASSIFIER_MODELS.clear()
+    runtime._CLASSIFIER_STACK_STATUS = None
+    runtime._IMPORTED_VERSIONS_ANNOUNCED = False
     with runtime._CLASSIFIER_LOAD_LOCKS_GUARD:
         runtime._CLASSIFIER_LOAD_LOCKS.clear()
 
@@ -388,3 +392,539 @@ class TestModelLabels:
         # Degrading into "not verified" rather than into a failure: a caller that
         # cannot read the labels must not take the turn down over it.
         assert runtime.model_labels(object()) == ()
+
+
+def stack_with(monkeypatch, present, versions=None, find_spec_raises=()):
+    """Make `find_spec` report exactly `present`, without touching the real stack.
+
+    Every test here monkeypatches it rather than reading the environment: the
+    unit suite must give the same answer on a developer machine with no Torch and
+    inside the container where Torch is installed, or the tests would assert what
+    the runner happens to have rather than what the code does.
+    """
+    versions = versions or {}
+
+    def fake_find_spec(name):
+        if name in find_spec_raises:
+            raise ValueError(f"{name} has a broken parent package")
+        return object() if name in present else None
+
+    def fake_version(name):
+        if name not in versions:
+            raise LookupError(name)
+        return versions[name]
+
+    monkeypatch.setattr(runtime.importlib.util, "find_spec", fake_find_spec)
+    monkeypatch.setattr(runtime.importlib.metadata, "version", fake_version)
+    # The probe is cached for the life of the process, so patching the lookups
+    # is not enough on its own: a status computed by an earlier test would
+    # survive and this helper would silently do nothing.
+    runtime._CLASSIFIER_STACK_STATUS = None
+
+
+class TestClassifierStackStatus:
+    """Whether Torch and Transformers are findable, answered without importing.
+
+    The no-import property is the whole point rather than an optimisation: this
+    runs at activation and inside the guard summary, and loading Torch to find
+    out whether Torch is installed would defeat making it optional at all.
+    """
+
+    def test_a_complete_stack_reports_available_with_versions(self, monkeypatch):
+        stack_with(
+            monkeypatch,
+            present={"torch", "transformers"},
+            versions={"torch": "2.7.1", "transformers": "4.50.3"},
+        )
+
+        status = runtime.classifier_stack_status()
+
+        assert status.available is True
+        assert status.missing == ()
+        assert status.versions == {"torch": "2.7.1", "transformers": "4.50.3"}
+
+    @pytest.mark.parametrize(
+        "present, missing",
+        [
+            ({"torch"}, ("transformers",)),
+            ({"transformers"}, ("torch",)),
+            (set(), ("torch", "transformers")),
+        ],
+    )
+    def test_each_missing_combination_is_named_exactly(
+        self, monkeypatch, present, missing
+    ):
+        # The names are a log contract: the `missing=` field is what somebody
+        # greps for, and half a stack is a different problem from none of it.
+        stack_with(monkeypatch, present=present, versions={"torch": "2.7.1"})
+
+        status = runtime.classifier_stack_status()
+
+        assert status.available is False
+        assert status.missing == missing
+
+    def test_find_spec_raising_counts_as_missing(self, monkeypatch):
+        # `find_spec` raises rather than returning None for some broken
+        # installations. The guard cannot run either way, and this function must
+        # never be the thing that takes an activation down.
+        stack_with(
+            monkeypatch,
+            present={"torch", "transformers"},
+            find_spec_raises=("torch",),
+        )
+
+        status = runtime.classifier_stack_status()
+
+        assert status.available is False
+        assert status.missing == ("torch",)
+
+    def test_a_package_without_metadata_reports_unknown(self, monkeypatch):
+        # Importable with no distribution metadata: installed from a source tree,
+        # vendored, or shadowed on the path. Not knowing the version is not a
+        # failure, and must not become one.
+        stack_with(
+            monkeypatch,
+            present={"torch", "transformers"},
+            versions={"torch": "2.7.1"},
+        )
+
+        status = runtime.classifier_stack_status()
+
+        assert status.available is True
+        assert status.versions["transformers"] == runtime.UNKNOWN_VERSION
+
+    def test_the_status_never_imports_the_stack(self, monkeypatch):
+        # The strongest form of the property: the modules are poisoned in
+        # `sys.modules`, so any import would raise. A status that comes back at
+        # all proves nothing was imported.
+        stack_with(monkeypatch, present=set())
+        monkeypatch.setitem(sys.modules, "torch", None)
+        monkeypatch.setitem(sys.modules, "transformers", None)
+
+        assert runtime.classifier_stack_status().available is False
+
+    def test_missing_is_rendered_as_one_grep_friendly_field(self, monkeypatch):
+        stack_with(monkeypatch, present=set())
+
+        assert (
+            runtime.classifier_stack_status().describe_missing()
+            == "torch+transformers"
+        )
+
+    def test_versions_are_rendered_in_a_stable_order(self, monkeypatch):
+        stack_with(
+            monkeypatch,
+            present={"torch", "transformers"},
+            versions={"torch": "2.7.1", "transformers": "4.50.3"},
+        )
+
+        assert (
+            runtime.classifier_stack_status().describe_versions()
+            == "torch=2.7.1, transformers=4.50.3"
+        )
+
+
+class TestStackRemediation:
+    """Missing stack and broken stack are different problems and read differently.
+
+    Telling somebody to install what they already installed sends them after the
+    wrong thing, which is the failure mode this separation exists to avoid.
+    """
+
+    def test_an_absent_stack_names_both_files_in_install_order(self, monkeypatch):
+        stack_with(monkeypatch, present=set())
+
+        remedy = runtime.stack_remediation(
+            ModuleNotFoundError("No module named 'torch'")
+        )
+
+        torch_file = remedy.index("requirements-classifiers-torch-cpu.txt")
+        transformers_file = remedy.index("and then requirements-classifiers.txt")
+        # Torch first: the CPU wheel has to be resolved from the PyTorch index
+        # before Transformers is allowed to pull one from PyPI.
+        assert torch_file < transformers_file
+
+    def test_an_absent_stack_carries_no_absolute_path(self, monkeypatch):
+        # A deployment-specific path in a log line is wrong on every other
+        # deployment, and this line is written on all of them.
+        stack_with(monkeypatch, present=set())
+
+        remedy = runtime.stack_remediation()
+
+        assert "/app" not in remedy
+        assert ":\\" not in remedy
+
+    def test_an_absent_stack_says_the_deterministic_guards_are_unaffected(
+        self, monkeypatch
+    ):
+        stack_with(monkeypatch, present=set())
+
+        assert "deterministic guards" in runtime.stack_remediation()
+
+    def test_a_present_but_unimportable_stack_is_a_different_message(
+        self, monkeypatch
+    ):
+        stack_with(monkeypatch, present={"torch", "transformers"})
+
+        remedy = runtime.stack_remediation(
+            ModuleNotFoundError("No module named 'transformers.utils'")
+        )
+
+        assert "installed but the import failed" in remedy
+        assert "requirements-classifiers-torch-cpu.txt" not in remedy
+
+    def test_an_unrelated_failure_on_a_complete_stack_gets_no_stack_advice(
+        self, monkeypatch
+    ):
+        # Composability with `access_remediation()`: each speaks only for the
+        # cause it recognises, so a gated-model failure gets that advice and not
+        # this one.
+        stack_with(monkeypatch, present={"torch", "transformers"})
+
+        assert runtime.stack_remediation(OSError("401 Client Error: gated repo")) == ""
+
+    def test_no_error_on_a_complete_stack_is_silent(self, monkeypatch):
+        stack_with(monkeypatch, present={"torch", "transformers"})
+
+        assert runtime.stack_remediation() == ""
+
+
+class TestMissingStackEntersTheNegativeCache:
+    """The defect this migration had to fix before Transformers could be optional.
+
+    The import used to sit outside the `try` that records a failed load, so a
+    `ModuleNotFoundError` bypassed the negative cache entirely: every message
+    retried the import, took the load lock and paid the wait, for a package that
+    cannot appear without restarting the process.
+    """
+
+    def without_transformers(self, monkeypatch):
+        """Make importing `transformers` raise, as an image without it would."""
+        monkeypatch.setitem(sys.modules, "transformers", None)
+
+    def test_a_missing_module_is_remembered_as_a_failed_load(self, monkeypatch):
+        self.without_transformers(monkeypatch)
+
+        with pytest.raises(Exception):
+            runtime.get_pipeline(A_MODEL)
+
+        reason = runtime.classifier_load_error(A_MODEL)
+        assert reason is not None
+        assert "transformers" in reason.lower()
+
+    def test_the_second_call_never_reaches_the_import(self, monkeypatch):
+        self.without_transformers(monkeypatch)
+
+        with pytest.raises(Exception):
+            runtime.get_pipeline(A_MODEL)
+
+        imports = []
+
+        def counting_import(name, *args, **kwargs):
+            imports.append(name)
+            raise ModuleNotFoundError(name)
+
+        monkeypatch.setattr("builtins.__import__", counting_import)
+
+        with pytest.raises(runtime.ClassifierUnavailable):
+            runtime.get_pipeline(A_MODEL)
+
+        assert imports == []
+
+    def test_the_second_call_does_not_take_the_load_lock(self, monkeypatch):
+        # The lock is what costs five seconds per concurrent turn during a cold
+        # load. A stack that will never appear must not pay it more than once.
+        self.without_transformers(monkeypatch)
+
+        with pytest.raises(Exception):
+            runtime.get_pipeline(A_MODEL)
+
+        # A `threading.Lock` refuses attribute assignment, so the count is taken
+        # one level up, on the function that hands the lock out. Reaching it at
+        # all is what costs the wait.
+        reached = []
+        original = runtime._classifier_load_lock
+
+        def counting_load_lock(model_name):
+            reached.append(model_name)
+            return original(model_name)
+
+        monkeypatch.setattr(runtime, "_classifier_load_lock", counting_load_lock)
+
+        with pytest.raises(runtime.ClassifierUnavailable):
+            runtime.get_pipeline(A_MODEL)
+
+        assert reached == []
+
+    def test_the_warning_carries_the_install_remedy(self, monkeypatch):
+        warnings = []
+        monkeypatch.setattr(runtime.runtime_log, "warning", warnings.append)
+        stack_with(monkeypatch, present=set())
+        self.without_transformers(monkeypatch)
+
+        with pytest.raises(Exception):
+            runtime.get_pipeline(A_MODEL)
+
+        assert len(warnings) == 1
+        assert "requirements-classifiers-torch-cpu.txt" in warnings[0]
+
+    def test_the_remembered_reason_is_redacted(self, monkeypatch):
+        # Same contract as every other stored failure: the text of a third-party
+        # exception is not ours to control, and it reaches a log through
+        # `classifier_load_error()`.
+        #
+        # Two constraints on this fixture, both from `.githooks/check-staged-
+        # secrets.sh`, and both learned by having the commit blocked.
+        #
+        # The value is short: redaction needs eight characters after `hf_` and
+        # the hook blocks twenty or more, so a fake lives in the gap. And the
+        # variable is not called `secret`, `password` or `access_token` — the
+        # scanner also matches an assignment of any quoted eight-character value
+        # to a name like those, whatever the value is.
+        fake_token = "hf_fakestacktoken"
+
+        def explode(task, model, token=None, **kwargs):
+            raise ModuleNotFoundError(f"No module named 'torch'; {fake_token}")
+
+        fake_transformers(monkeypatch, explode)
+
+        with pytest.raises(Exception):
+            runtime.get_pipeline(A_MODEL, token=fake_token)
+
+        assert fake_token not in runtime.classifier_load_error(A_MODEL)
+
+
+class TestStackStatusIsProbedOncePerProcess:
+    """The probe is on the per-message path, so it has to be cached.
+
+    `announce_active_guards()` is the first thing `guard_input_message` does and
+    it builds the guard summary, which asks for this status. Measured in the
+    container with the stack present, one uncached call costs 19.9 ms — against
+    roughly 0.1 ms for every deterministic check together. Two hundred times the
+    cost of the guards, in front of every turn.
+    """
+
+    def counting_probe(self, monkeypatch):
+        lookups = []
+
+        def fake_find_spec(name):
+            lookups.append(name)
+            return object()
+
+        monkeypatch.setattr(runtime.importlib.util, "find_spec", fake_find_spec)
+        monkeypatch.setattr(
+            runtime.importlib.metadata, "version", lambda name: "1.0"
+        )
+        runtime._CLASSIFIER_STACK_STATUS = None
+        return lookups
+
+    def test_the_path_is_scanned_once_however_often_it_is_asked(self, monkeypatch):
+        lookups = self.counting_probe(monkeypatch)
+
+        for _ in range(50):
+            runtime.classifier_stack_status()
+
+        assert lookups == list(runtime.CLASSIFIER_STACK_PACKAGES)
+
+    def test_the_same_object_comes_back_every_time(self, monkeypatch):
+        self.counting_probe(monkeypatch)
+
+        assert runtime.classifier_stack_status() is runtime.classifier_stack_status()
+
+    def test_the_answer_is_unchanged_by_caching(self, monkeypatch):
+        # Caching must not quietly alter what the callers see, which is the
+        # thing a cache added late is most likely to do.
+        stack_with(
+            monkeypatch,
+            present={"torch"},
+            versions={"torch": "2.7.1"},
+        )
+
+        status = runtime.classifier_stack_status()
+
+        assert status.available is False
+        assert status.missing == ("transformers",)
+        assert status.versions == {"torch": "2.7.1"}
+
+    def test_nothing_needs_invalidating_while_the_process_runs(self, monkeypatch):
+        # The property that makes the cache sound: installing the stack means
+        # rebuilding the image and restarting, and a restart clears this module
+        # along with everything else in it. Unlike the settings, which change
+        # under a running process, packages do not appear mid-turn.
+        stack_with(monkeypatch, present=set())
+        assert runtime.classifier_stack_status().available is False
+
+        # Even a stack that materialises on the path is not picked up, and that
+        # is the intended behaviour rather than a limitation.
+        stack_with(monkeypatch, present={"torch", "transformers"})
+        runtime._CLASSIFIER_STACK_STATUS = runtime.ClassifierStackStatus(
+            available=False, missing=("torch", "transformers"), versions={}
+        )
+
+        assert runtime.classifier_stack_status().available is False
+
+
+class TestRemediationNamesTheRightProblem:
+    """A `ModuleNotFoundError` is not automatically about our two packages.
+
+    Some models need a package neither Torch nor Transformers pulls in —
+    `sentencepiece` and `protobuf` are the usual ones — and that failure is fixed
+    by installing it. Telling the reader the stack is broken and that installing
+    again is not the fix sends them after the wrong problem, which is the exact
+    misdirection the two separate messages exist to avoid.
+    """
+
+    @pytest.mark.parametrize("package", ["torch", "transformers"])
+    def test_our_own_packages_report_a_broken_stack(self, monkeypatch, package):
+        stack_with(monkeypatch, present={"torch", "transformers"})
+
+        remedy = runtime.stack_remediation(
+            ModuleNotFoundError(f"No module named '{package}'", name=package)
+        )
+
+        assert "installed but the import failed" in remedy
+
+    def test_a_submodule_still_names_the_package_that_owns_it(self, monkeypatch):
+        stack_with(monkeypatch, present={"torch", "transformers"})
+
+        remedy = runtime.stack_remediation(
+            ModuleNotFoundError(
+                "No module named 'transformers.utils'", name="transformers.utils"
+            )
+        )
+
+        assert "installed but the import failed" in remedy
+
+    @pytest.mark.parametrize("package", ["sentencepiece", "protobuf", "tiktoken"])
+    def test_an_unrelated_missing_package_gets_no_stack_advice(
+        self, monkeypatch, package
+    ):
+        stack_with(monkeypatch, present={"torch", "transformers"})
+
+        remedy = runtime.stack_remediation(
+            ModuleNotFoundError(f"No module named '{package}'", name=package)
+        )
+
+        assert remedy == ""
+
+    def test_the_decision_survives_being_handed_a_string(self, monkeypatch):
+        # Callers pass the redacted text of an exception as often as the
+        # exception, and by then `ImportError.name` is gone.
+        stack_with(monkeypatch, present={"torch", "transformers"})
+
+        assert "installed but the import failed" in runtime.stack_remediation(
+            "No module named 'torch'"
+        )
+        assert runtime.stack_remediation("No module named 'sentencepiece'") == ""
+
+    def test_an_absent_stack_still_wins_over_the_module_name(self, monkeypatch):
+        # When the stack is genuinely missing, what the exception happens to name
+        # first does not matter: the install instructions are the fix.
+        stack_with(monkeypatch, present=set())
+
+        remedy = runtime.stack_remediation(
+            ModuleNotFoundError("No module named 'sentencepiece'", name="sentencepiece")
+        )
+
+        assert "requirements-classifiers-torch-cpu.txt" in remedy
+
+    @pytest.mark.parametrize(
+        "name, expected",
+        [
+            ("torch", "torch"),
+            ("transformers.utils.import_utils", "transformers"),
+            (None, None),
+        ],
+    )
+    def test_the_missing_module_is_reduced_to_its_top_level(self, name, expected):
+        error = ModuleNotFoundError("boom", name=name) if name else ValueError("boom")
+
+        assert runtime._missing_module_name(error) == expected
+
+
+class TestImportedVersionsAreAnnouncedOnce:
+    """The line that exposes a version bound the core cannot enforce.
+
+    The core matches requirements by package name and ignores the version, so
+    `transformers>=4.50,<5` is skipped on an image that already carries a 5.x.
+    Nothing in the plugin can enforce that bound; this line is what makes a
+    breach of it visible.
+    """
+
+    def working_stack(self, monkeypatch, transformers_version="4.50.3"):
+        monkeypatch.setitem(
+            sys.modules,
+            "torch",
+            type("T", (), {"__version__": "2.7.1"})(),
+        )
+        monkeypatch.setitem(
+            sys.modules,
+            "transformers",
+            type("M", (), {"__version__": transformers_version})(),
+        )
+
+    def test_the_versions_are_logged_once(self, monkeypatch):
+        infos = []
+        monkeypatch.setattr(runtime.runtime_log, "info", infos.append)
+        self.working_stack(monkeypatch)
+
+        for _ in range(3):
+            runtime._log_imported_stack_versions()
+
+        lines = [line for line in infos if "stack imported" in line]
+        assert len(lines) == 1
+        assert "transformers=4.50.3" in lines[0]
+        assert "torch=2.7.1" in lines[0]
+
+    def test_a_failure_does_not_suppress_the_line_for_ever(self, monkeypatch):
+        # The flag is set after the line is written, not before. Setting it first
+        # is the ordinary way to write a once-per-process guard and it is wrong
+        # here: one failure would permanently hide the only line that exposes an
+        # unenforceable version bound.
+        infos = []
+        monkeypatch.setattr(runtime.runtime_log, "info", infos.append)
+        monkeypatch.setitem(sys.modules, "torch", None)
+
+        runtime._log_imported_stack_versions()
+        assert not [line for line in infos if "stack imported" in line]
+
+        self.working_stack(monkeypatch)
+        runtime._log_imported_stack_versions()
+
+        assert len([line for line in infos if "stack imported" in line]) == 1
+
+    def test_a_version_out_of_the_declared_range_is_still_reported(
+        self, monkeypatch
+    ):
+        # The whole point: an image carrying a 5.x keeps it, because the core
+        # skipped our bound. The line has to say so rather than assume the range.
+        infos = []
+        monkeypatch.setattr(runtime.runtime_log, "info", infos.append)
+        self.working_stack(monkeypatch, transformers_version="5.17.0")
+
+        runtime._log_imported_stack_versions()
+
+        line = next(line for line in infos if "stack imported" in line)
+        assert "transformers=5.17.0" in line
+
+    def test_a_successful_load_announces_the_versions(self, monkeypatch):
+        # Reached through the real path rather than by calling the helper: the
+        # line has to appear when a pipeline actually loads.
+        infos = []
+        monkeypatch.setattr(runtime.runtime_log, "info", infos.append)
+        monkeypatch.setitem(
+            sys.modules, "torch", type("T", (), {"__version__": "2.7.1"})()
+        )
+        module = type(
+            "M",
+            (),
+            {
+                "__version__": "4.50.3",
+                "pipeline": staticmethod(lambda task, model, token=None, **k: object()),
+            },
+        )()
+        monkeypatch.setitem(sys.modules, "transformers", module)
+
+        runtime.get_pipeline(A_MODEL)
+
+        assert any("stack imported" in line for line in infos)

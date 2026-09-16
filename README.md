@@ -68,14 +68,21 @@ reaches retrieval or the language model.
 | Host application | A website chatbot integration that sends user messages to Cheshire Cat AI |
 | Companion plugins | None: the plugin is self-contained |
 
-Third-party packages are declared in the plugin's own `requirements.txt`, which
-Cheshire Cat AI installs on activation:
+One third-party package is declared in the plugin's own `requirements.txt`,
+which Cheshire Cat AI installs on activation:
 
 | Package | Needed for | When it is imported |
 | --- | --- | --- |
 | `phonenumberslite` | phone-number validation in the privacy guards. The lite build on purpose: the full `phonenumbers` adds 20.9 MB of geocoding, carrier and timezone data this plugin never uses, against 2.2 MB | always, at module load |
-| `transformers` | the optional local classifiers | only when a classifier guard is enabled |
-| `torch` | the backend `transformers` runs those classifiers on | only when a classifier guard is enabled |
+
+Two more are needed **only by the two classifier guards**, and they are not
+installed automatically — see
+[The Optional Classifier Stack](#the-optional-classifier-stack):
+
+| Package | Needed for | Installed by |
+| --- | --- | --- |
+| `torch` | the backend the classifiers run on | the image, when a classifier guard is used |
+| `transformers` | the local classifier pipelines | the image, when a classifier guard is used |
 
 Sharing an installation with other plugins is supported: when one of its own
 checks does not trigger, a reply another plugin has already produced is passed
@@ -107,7 +114,10 @@ reading:
    to be listed. Details in
    [DOC/OutputGuards.md](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/OutputGuards.md).
 3. **Decide whether to enable the two classifier guards,** weighing the cost
-   described under [Guard Summary](#guard-summary).
+   described under [Guard Summary](#guard-summary). Enabling one also requires
+   the optional stack in the image: ticking the box installs nothing, and a
+   guard whose stack is absent fails open. See
+   [The Optional Classifier Stack](#the-optional-classifier-stack).
 4. **If you enable one, pass the Hugging Face token through the `HF_TOKEN`
    environment variable,** not through the admin panel: a token entered in the
    panel is stored in plain text in `settings.json`.
@@ -115,6 +125,73 @@ reading:
 **If the `Rate Limiter` plugin is also installed**, its content checks overlap
 with these and its suspensions are outside this plugin's reach. See
 [DOC/RateLimiter.md](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/RateLimiter.md).
+
+## The Optional Classifier Stack
+
+The two classifier guards need `torch` and `transformers`. The plugin does
+**not** declare them as automatic requirements, and an installation that leaves
+both classifiers off needs nothing from this section: every guard that ships
+enabled is deterministic and works without them.
+
+The reason is what Cheshire Cat AI does with `requirements.txt`. It installs it
+on every activation, and it offers no way to choose a package index, so `torch`
+resolves to a CUDA build — roughly 3 GB of NVIDIA wheels on a host with no GPU.
+It also replaced `huggingface-hub` and `tokenizers`, which the core uses for its
+own embedders.
+
+### Installing it
+
+Into the **image**, at build time. Not at pod start, and not from the plugin:
+the plugin never runs `pip`, and ticking a box in the admin panel installs
+nothing. From the plugin directory:
+
+```bash
+python -m pip install --no-cache-dir -r requirements-classifiers-torch-cpu.txt
+python -m pip install --no-cache-dir -r requirements-classifiers.txt
+python -m pip check
+python -c "import torch, transformers; assert torch.version.cuda is None; print(torch.__version__, transformers.__version__)"
+```
+
+Two invocations and two files, in that order, and neither is arbitrary.
+`--index-url` applies to the whole invocation, so Torch is resolved from the
+PyTorch CPU index alone; installing Transformers under the same option would
+resolve it, and everything it needs, from that index too. `--extra-index-url`
+is deliberately not used: pip does not rank indexes, so it may still pick the
+CUDA wheel from PyPI, and the configuration invites dependency confusion.
+
+Promote only an image where `pip check`, document ingestion, declarative recall
+and both classifiers pass. Do not widen the version ranges to make a build
+succeed.
+
+**On a host with a GPU**, do not install the CPU file over an existing GPU
+Torch. Keep that Torch if it satisfies `torch>=2,<3` and install only
+`requirements-classifiers.txt`. The plugin passes no `device` to the pipeline
+and runs on CPU today, so the GPU path is the deployment's decision, not this
+plugin's.
+
+### When it is absent
+
+Nothing breaks and nothing is hidden:
+
+- every deterministic guard behaves identically;
+- activation logs one line saying the stack is missing and naming which
+  packages — at `INFO` when no classifier is enabled, at `WARNING` with install
+  instructions when one is;
+- an enabled classifier fails open, once, and the `guards active` line reports
+  `classifier(stack not installed: …)` rather than claiming coverage;
+- `security` stays covered by its deterministic patterns; `tone` has no
+  deterministic half, so it is reported as uncovered.
+
+### Upgrading an installation that uses a classifier
+
+Build and verify the image **first**, deploy it, and only then update the
+plugin. There is no window in which the updated plugin should run without the
+stack. If the new image fails, keep the previous one and do not update the
+plugin.
+
+Updating the plugin does not shrink an existing image: Cheshire Cat AI installs
+dependencies and never removes them. The saving arrives with the first image
+built from scratch.
 
 ## Operational Limits
 

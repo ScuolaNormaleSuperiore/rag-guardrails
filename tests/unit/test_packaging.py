@@ -118,3 +118,132 @@ class TestReleasePackageContents:
             if name.startswith(("DEV/", "DOC/", "tests/", ".githooks/"))
         }
         assert not private, f"development material in the package: {sorted(private)}"
+
+
+# The optional stack, installed by the image rather than by the core. Each file
+# is a separate pip invocation on purpose, and the order between them is part of
+# the contract: Torch has to come from the PyTorch CPU index before Transformers
+# is allowed to resolve anything from PyPI.
+TORCH_CPU_REQUIREMENTS = "requirements-classifiers-torch-cpu.txt"
+CLASSIFIER_REQUIREMENTS = "requirements-classifiers.txt"
+
+
+class TestAutomaticRequirements:
+    """What the core installs by itself, which is now one package.
+
+    `torch` and `transformers` moved out because the core installs requirements
+    on every activation and cannot be told to use a different index: on a host
+    with no GPU that pulled roughly 3 GB of CUDA wheels, and replaced
+    `huggingface-hub` and `tokenizers`, which the core uses for its embedders.
+    """
+
+    def test_only_phonenumberslite_is_installed_automatically(self):
+        lines = [
+            line.strip()
+            for line in (REPO_ROOT / "requirements.txt")
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if line.strip()
+        ]
+
+        assert lines == ["phonenumberslite>=9"], (
+            "requirements.txt is installed by the core on every activation and "
+            "cannot carry the optional classifier stack: the core offers no way "
+            "to choose an index, so torch resolves to a CUDA build."
+        )
+
+    def test_phonenumberslite_stays_mandatory(self):
+        # `checks.py` imports it at module level, so it is not optional in any
+        # sense: without it the plugin fails at import and no guard runs.
+        assert "phonenumberslite" in (REPO_ROOT / "requirements.txt").read_text(
+            encoding="utf-8"
+        )
+
+    def test_the_heavy_stack_is_not_installed_automatically(self):
+        automatic = (REPO_ROOT / "requirements.txt").read_text(encoding="utf-8")
+
+        assert "torch" not in automatic
+        assert "transformers" not in automatic
+
+
+class TestOptionalRequirementFiles:
+    """The two files pip reads and the core never does.
+
+    They may carry pip options precisely because the core does not parse them:
+    it opens the file named exactly `requirements.txt` and nothing else.
+    """
+
+    def read(self, name):
+        return (REPO_ROOT / name).read_text(encoding="utf-8")
+
+    def test_both_optional_files_exist(self):
+        assert (REPO_ROOT / TORCH_CPU_REQUIREMENTS).is_file()
+        assert (REPO_ROOT / CLASSIFIER_REQUIREMENTS).is_file()
+
+    def test_both_optional_files_are_shipped(self):
+        # The commands in README.md install them from the plugin directory, so
+        # an image build has to find them where the plugin was unpacked.
+        shipped = set(load_packaging_module().INCLUDED_FILES)
+
+        assert TORCH_CPU_REQUIREMENTS in shipped
+        assert CLASSIFIER_REQUIREMENTS in shipped
+
+    def test_torch_comes_from_the_cpu_index(self):
+        assert (
+            "--index-url https://download.pytorch.org/whl/cpu"
+            in self.read(TORCH_CPU_REQUIREMENTS)
+        )
+
+    def test_the_cpu_index_replaces_pypi_rather_than_competing_with_it(self):
+        # `--extra-index-url` adds an index without ranking it, so pip may still
+        # pick the CUDA wheel published on PyPI, and the configuration invites
+        # dependency confusion. `--index-url` replaces PyPI for this invocation,
+        # which is the only form that actually decides the outcome.
+        assert "--extra-index-url" not in self.read(TORCH_CPU_REQUIREMENTS)
+
+    def test_torch_is_bounded_below_the_next_major(self):
+        assert "torch>=2,<3" in self.read(TORCH_CPU_REQUIREMENTS)
+
+    def test_transformers_stays_on_the_verified_line(self):
+        # The `<5` is about the transitive dependencies, not about the response
+        # shape: the 5.x chain replaces `huggingface-hub` and `tokenizers`, which
+        # the core uses for its embedders.
+        assert "transformers>=4.50,<5" in self.read(CLASSIFIER_REQUIREMENTS)
+
+    def test_the_two_stacks_stay_in_separate_files(self):
+        # Two pip invocations, not one: `--index-url` applies to the whole
+        # invocation, so installing Transformers under it would resolve it, and
+        # everything it needs, from the PyTorch index too.
+        assert "transformers" not in self.read(TORCH_CPU_REQUIREMENTS)
+        assert "torch" not in self.read(CLASSIFIER_REQUIREMENTS)
+
+    @pytest.mark.parametrize(
+        "name", [TORCH_CPU_REQUIREMENTS, CLASSIFIER_REQUIREMENTS]
+    )
+    def test_no_comments_and_no_blank_lines(self, name):
+        # The same hygiene as the automatic file even though the core never
+        # reads these, for one reason: the day somebody merges a line back into
+        # `requirements.txt`, a comment travelling with it makes the core
+        # install nothing.
+        lines = self.read(name).splitlines()
+
+        assert lines == [line for line in lines if line.strip()]
+        assert not [line for line in lines if line.lstrip().startswith("#")]
+
+    @pytest.mark.parametrize(
+        "name", [TORCH_CPU_REQUIREMENTS, CLASSIFIER_REQUIREMENTS]
+    )
+    def test_no_exact_pins(self, name):
+        # The core compares requirements by package *name* and ignores the
+        # version, so `==` protects nothing and breaks whoever installed first.
+        assert "==" not in self.read(name)
+
+    def test_the_core_parser_is_not_applied_to_the_optional_files(self):
+        # Asserting the inverse of `test_requirements_carry_nothing_the_core
+        # _cannot_parse`, so the two rules stay visibly different rather than
+        # one drifting into the other: the option line is *correct* here and
+        # fatal there, and the distinction is which file the core opens.
+        first_line = self.read(TORCH_CPU_REQUIREMENTS).splitlines()[0]
+
+        with pytest.raises(InvalidRequirement):
+            Requirement(first_line)

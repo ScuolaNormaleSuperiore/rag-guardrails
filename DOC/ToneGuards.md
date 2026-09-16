@@ -49,6 +49,26 @@ oversight, and it has two reasons:
   threshold comes from a seven-message probe, which is a starting point and not a
   calibration.
 
+### Enabling it needs the optional classifier stack
+
+`torch` and `transformers` are not installed by the core. They belong to the
+**optional classifier stack**, which a deployment installs into its image when it
+decides to use a classifier guard; the commands and their order are in
+`README.md`, section *The optional classifier stack*.
+
+Ticking the box in the admin panel installs nothing, and the panel cannot check
+the image, so the two states have to be told apart in the log:
+
+- at activation, one line says whether the stack is present, at `WARNING` with
+  install instructions when a classifier is enabled and it is not;
+- at the first message afterwards, `guards active` reports
+  `tone(classifier(stack not installed: …))` instead of a model and a threshold,
+  and lists `tone` among the categories no guard covers.
+
+The guard fails open, once, exactly as it does for a model that cannot be
+downloaded. `tone` has no deterministic half, so an absent stack means the
+category is genuinely uncovered — unlike `security`, which keeps its patterns.
+
 Enable it from the admin panel after reading the log line it writes on the first
 message. Until then the `tone` category is uncovered, and the `guards active` line
 says so as `tone(disabled)`.

@@ -69,10 +69,22 @@ Its behavior is:
    immediately.
 2. If the model is present in `_FAILED_CLASSIFIER_MODELS`, do not retry the
    load and raise `ClassifierUnavailable`.
-3. Otherwise, try to build the pipeline with `transformers.pipeline(...)`.
+3. Otherwise, import `transformers` and try to build the pipeline with
+   `transformers.pipeline(...)`.
 4. If loading succeeds, store the pipeline in `_CLASSIFIER_PIPELINES`.
 5. If loading fails, store the redacted failure reason in
    `_FAILED_CLASSIFIER_MODELS` and re-raise the original failure.
+
+Step 3 covers **both** failures, and that is deliberate. `transformers` is an
+optional dependency installed by the image rather than by the core, so on an
+installation without the optional classifier stack the import itself raises
+`ModuleNotFoundError` — and that counts as a failed load like any other.
+
+It used to sit outside the block that records a failure, which made the absent
+stack the one error the negative cache did not remember: every message repeated
+the import, took the model load lock and paid its five-second timeout, for a
+package that cannot appear without restarting the process. It is now remembered
+once, and the warning that reports it carries the install instructions.
 
 The callers then turn that into the plugin's fail-open behavior: a classifier
 that cannot run must not block the message and must not take the turn down.
