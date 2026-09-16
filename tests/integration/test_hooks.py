@@ -852,20 +852,85 @@ class TestConfiguration:
             checks.DEFAULT_MAX_MESSAGE_CHARS
         )
 
-    def test_unavailable_settings_fall_back_and_are_logged_at_info(
+    def test_unavailable_settings_fall_back_and_are_logged_at_warning(
         self, monkeypatch
     ):
-        infos, debugs = [], []
+        # Regression test. This used to be an INFO line, which put a reduction
+        # of protection at the level of the normal flow: the fallback discards
+        # every configured value, and the Help Desk address asserted below is
+        # the half of it the *user* reads, in all five refusal replies.
+        warnings, infos = [], []
+        monkeypatch.setattr(guards.log, "warning", warnings.append)
         monkeypatch.setattr(guards.log, "info", infos.append)
-        monkeypatch.setattr(guards.log, "debug", debugs.append)
+        guards._ANNOUNCED_SETTINGS_FALLBACK = None
 
         assert (
             guards.load_settings(make_cat()).help_desk_email
             == settings_module.DEFAULT_HELP_DESK_EMAIL
             == "helpdesk@example.org"
         )
-        assert any("settings unavailable" in line for line in infos)
-        assert not [line for line in debugs if "settings unavailable" in line]
+        assert any("settings unavailable" in line for line in warnings)
+        assert not [line for line in infos if "settings unavailable" in line]
+
+    def test_empty_settings_are_announced_rather_than_applied_in_silence(
+        self, monkeypatch
+    ):
+        # Regression test. An empty or None settings.json reached
+        # `model_validate({})`, which does not raise, so the whole set of
+        # defaults took effect without a single line anywhere.
+        for stored in ({}, None):
+            # Built by hand rather than through `make_cat`, which reads None as
+            # "this fake has no plugin registry" and would send the second case
+            # down the unavailable-settings path instead.
+            fake_plugin = types.SimpleNamespace(load_settings=lambda: stored)
+            cat = types.SimpleNamespace(
+                working_memory=types.SimpleNamespace(),
+                mad_hatter=types.SimpleNamespace(get_plugin=lambda: fake_plugin),
+            )
+
+            lines = []
+            for level in ("info", "warning", "debug", "error"):
+                monkeypatch.setattr(guards.log, level, lines.append, raising=False)
+            guards._ANNOUNCED_SETTINGS_FALLBACK = None
+
+            assert guards.load_settings(cat).max_message_chars == (
+                checks.DEFAULT_MAX_MESSAGE_CHARS
+            )
+            assert any("settings are empty" in line for line in lines), stored
+
+    def test_the_fallback_is_announced_once_and_again_after_a_recovery(
+        self, monkeypatch
+    ):
+        # The state repairs itself without the plugin reloading, so the dedupe
+        # has to clear on a successful read. Otherwise a second episode of the
+        # same problem — the one that matters, because it is the recurring one —
+        # would never be reported.
+        warnings = []
+        monkeypatch.setattr(guards.log, "warning", warnings.append)
+        guards._ANNOUNCED_SETTINGS_FALLBACK = None
+
+        broken = make_cat()
+        guards.load_settings(broken)
+        guards.load_settings(broken)
+        assert len(warnings) == 1
+
+        guards.load_settings(make_cat({"max_message_chars": 123}))
+        guards.load_settings(broken)
+        assert len(warnings) == 2
+
+    def test_no_settings_announcement_can_carry_the_token(self, monkeypatch):
+        # A ValidationError quotes the input that failed validation, and one of
+        # the fields it can quote is the Hugging Face token.
+        token = "hf_fakevaluefortests"
+        lines = []
+        for level in ("info", "warning", "debug", "error"):
+            monkeypatch.setattr(guards.log, level, lines.append, raising=False)
+        guards._ANNOUNCED_SETTINGS_FALLBACK = None
+
+        guards.load_settings(make_cat({"huggingface_token": [token]}))
+
+        assert lines, "the degradation must be announced at all"
+        assert not [line for line in lines if token in line]
 
 
 class TestGuardAnnouncement:

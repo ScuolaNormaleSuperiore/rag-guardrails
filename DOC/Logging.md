@@ -154,6 +154,35 @@ counting either one by grepping cannot double count a turn.
 While the local classifiers are being evaluated, pipeline reuse is also logged
 at `INFO` for either one.
 
+## Degraded configuration
+
+When the configuration cannot be read, the plugin keeps the turn alive on the
+shipped defaults and says so at `WARNING`, deduplicated:
+
+```text
+[rag-guardrails] settings unavailable (<reason>), using defaults; every configured value is discarded, including the Help Desk address shown to users. Not repeated until the configuration is read successfully
+```
+
+Three conditions produce it, and the first word of the reason tells them apart:
+`settings unavailable (…)` when the core's own read raises, `settings are empty`
+when `settings.json` is empty or `null`, and `invalid settings (…)` when it does
+not validate.
+
+**`WARNING` and not `INFO`, because this is a reduction of protection rather
+than a normal event.** The fallback discards every configured value at once: the
+thresholds, the toggles — so a guard an administrator switched on is now off —
+the allowed-contacts list, the reply texts, and the Help Desk address, which
+returns to the shipped placeholder and is shown verbatim to users in all five
+refusal replies. It is the one degradation whose effect the *user* reads.
+
+The deduplication clears on the first successful read, unlike the classifier
+announcements: this condition is repaired by fixing a file, not by reloading the
+plugin, so a second episode is announced again instead of being swallowed.
+
+The reason is redacted before it is written. A `ValidationError` quotes the input
+that failed validation, and one of the fields it can quote is the Hugging Face
+token.
+
 ## Logging boundaries
 
 The refused message itself is never logged by this plugin, on any path. Only

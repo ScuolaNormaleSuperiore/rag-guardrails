@@ -200,6 +200,44 @@ _ANNOUNCED_CLASSIFIER_FAILURE: str | None = None
 # nothing else at all.
 _ANNOUNCED_OFFENSIVE_CLASSIFIER_FAILURE: str | None = None
 
+# The settings degradation already reported. Unlike the two classifier failures
+# above, this state repairs itself without the plugin reloading — somebody fixes
+# `settings.json` — so it is cleared on the first successful read and a second
+# episode is announced again instead of being swallowed as a duplicate.
+_ANNOUNCED_SETTINGS_FALLBACK: str | None = None
+
+
+def announce_settings_fallback(reason: str) -> None:
+    """Report once that the configuration was discarded and the defaults are in use.
+
+    At `WARNING`, and this is the point of the function rather than a detail:
+    the fallback keeps the turn alive but throws away **every** configured
+    value — the thresholds, the toggles, the allowed contacts, the reply texts
+    and the Help Desk address, which returns to the shipped placeholder and is
+    shown verbatim to users in all five refusal replies. A guard that quietly
+    reverts to its defaults is a reduction of protection, so it cannot be
+    announced at the level of the normal flow.
+
+    Once rather than once per turn, for the same reason as the classifier
+    announcements: the condition persists across turns, so repeating it buries
+    the log exactly when a configuration problem needs diagnosing.
+    """
+    global _ANNOUNCED_SETTINGS_FALLBACK
+
+    # A `ValidationError` quotes the input that failed, and one of the fields it
+    # can quote is the Hugging Face token. Redacted for the same reason the
+    # classifier announcements are: an exception text is not ours to control.
+    reason = redact_secrets(reason)
+    if reason == _ANNOUNCED_SETTINGS_FALLBACK:
+        return
+    _ANNOUNCED_SETTINGS_FALLBACK = reason
+
+    log.warning(
+        f"[rag-guardrails] {reason}, using defaults; every configured value is "
+        "discarded, including the Help Desk address shown to users. "
+        "Not repeated until the configuration is read successfully"
+    )
+
 
 def load_settings(cat) -> RagGuardrailsSettings:
     """Return the plugin configuration, falling back to the model defaults.
@@ -210,22 +248,31 @@ def load_settings(cat) -> RagGuardrailsSettings:
 
     The fallback is not only defensive: `load_settings()` returns settings.json
     verbatim, so an empty or partial file would otherwise yield no values.
+
+    Every path that falls back announces itself, including the empty file, which
+    used to reach `model_validate({})` and apply the whole set of defaults in
+    complete silence.
     """
+    global _ANNOUNCED_SETTINGS_FALLBACK
+
     try:
         stored = cat.mad_hatter.get_plugin().load_settings()
     except Exception as error:
-        log.info(
-            f"[rag-guardrails] settings unavailable ({error}), using defaults"
-        )
+        announce_settings_fallback(f"settings unavailable ({error})")
+        return RagGuardrailsSettings()
+
+    if not stored:
+        announce_settings_fallback("settings are empty")
         return RagGuardrailsSettings()
 
     try:
-        return RagGuardrailsSettings.model_validate(stored or {})
+        settings = RagGuardrailsSettings.model_validate(stored)
     except ValidationError as error:
-        log.warning(
-            f"[rag-guardrails] invalid settings, using defaults: {error}"
-        )
+        announce_settings_fallback(f"invalid settings ({error})")
         return RagGuardrailsSettings()
+
+    _ANNOUNCED_SETTINGS_FALLBACK = None
+    return settings
 
 
 def _render(template: str, settings: RagGuardrailsSettings) -> str:
