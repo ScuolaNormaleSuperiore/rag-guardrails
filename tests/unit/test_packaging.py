@@ -14,6 +14,7 @@ import importlib.util
 from pathlib import Path
 
 import pytest
+from packaging.requirements import InvalidRequirement, Requirement
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -82,17 +83,28 @@ class TestReleasePackageContents:
         # the only symptom is one ERROR in the log while activation continues.
         # The plugin then loads on a machine that happens to have the packages
         # already, and fails at import on a clean one.
+        # Asked of `Requirement()` itself rather than of a list of shapes we
+        # remembered to forbid: the core's condition is «does this parse», so
+        # anything else is an approximation of it. Comments and blank lines are
+        # the two that reach here by accident; a pip option line such as
+        # `--extra-index-url`, the obvious way to ask for a lighter torch build,
+        # is the one that reaches here on purpose and would pass a check written
+        # against the other two.
         requirements = (REPO_ROOT / "requirements.txt").read_text(encoding="utf-8")
 
-        offending = [
-            line
-            for line in requirements.splitlines()
-            if not line.strip() or line.lstrip().startswith("#")
-        ]
+        offending = []
+        for line in requirements.splitlines():
+            try:
+                Requirement(line)
+            except InvalidRequirement:
+                offending.append(line)
+
         assert not offending, (
             f"requirements.txt carries lines the core cannot parse: {offending}. "
-            "Comments and blank lines are valid for pip and fatal here: they "
-            "make the core install no dependency at all."
+            "Comments, blank lines and pip option lines are all valid for pip "
+            "and fatal here: the core calls Requirement() on every line inside "
+            "a try that abandons the whole loop, so one of them makes it "
+            "install no dependency at all."
         )
 
     def test_no_development_material_is_shipped(self):
