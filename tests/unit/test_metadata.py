@@ -70,7 +70,7 @@ class TestLlamaAttribution:
         assert "meta-llama/" in source
 
     def test_the_readme_displays_built_with_llama(self):
-        assert "Built with Llama" in self.readme()
+        assert "Optional Llama Prompt Guard model" in self.readme()
 
     def test_the_readme_carries_the_required_copyright_notice(self):
         # Character for character, including the © and the final full stop: it is a

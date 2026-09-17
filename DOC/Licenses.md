@@ -14,9 +14,10 @@ only**. See `LICENSE`.
 
 ## Why the models are not part of it
 
-This plugin distributes **no model weights**. The release package contains ten
-files — Python modules, `plugin.json`, `README.md`, `LICENSE`,
-`requirements.txt` — and nothing else. Every classifier model is downloaded at
+This plugin distributes **no model weights**. The release package contains twelve
+files — the six Python modules, `plugin.json`, `requirements.txt`, and the four
+documents a release carries: `README.md`, `CHANGELOG.md`, `SECURITY.md` and
+`LICENSE` — and nothing else. Every classifier model is downloaded at
 runtime, from Hugging Face, by the person who installs and configures the
 plugin, and each one carries its own licence which that person accepts directly
 with its publisher.
@@ -38,8 +39,7 @@ When it is, the following notice applies:
 
 > **Llama is licensed under the Llama Community License, Copyright © Meta Platforms, Inc. All Rights Reserved.**
 
-That notice is required by the licence, which is why it also appears in
-`README.md` rather than only here.
+The same notice is in `README.md`, section *License and model terms*.
 
 The applicable version, read from the model card on 2026-08-06, is the
 **Llama 4 Community License Agreement** (`license_name: llama4`). Both Meta

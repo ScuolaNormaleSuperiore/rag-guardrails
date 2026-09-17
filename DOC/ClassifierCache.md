@@ -60,7 +60,7 @@ message would add pointless work and noisy logs to the `fast_reply` path.
 
 ## How loading works
 
-The central function is `get_pipeline(model_name, token=None, **pipeline_kwargs)`
+The central function is `get_pipeline(model_name, token=False, **pipeline_kwargs)`
 in `classifier_runtime.py`.
 
 Its behavior is:
@@ -69,13 +69,35 @@ Its behavior is:
    immediately.
 2. If the model is present in `_FAILED_CLASSIFIER_MODELS`, do not retry the
    load and raise `ClassifierUnavailable`.
-3. Otherwise, try to build the pipeline with `transformers.pipeline(...)`.
-4. If loading succeeds, store the pipeline in `_CLASSIFIER_PIPELINES`.
-5. If loading fails, store the redacted failure reason in
+3. Otherwise, acquire that model's load lock, waiting at most
+   `CLASSIFIER_LOAD_WAIT_SECONDS`. See *Only one request loads a model* below.
+4. Re-read both caches, because another request may have filled either one while
+   this one waited.
+5. Try to build the pipeline with `transformers.pipeline(...)`.
+6. If loading succeeds, store the pipeline in `_CLASSIFIER_PIPELINES`.
+7. If loading fails, store the redacted failure reason in
    `_FAILED_CLASSIFIER_MODELS` and re-raise the original failure.
 
 The callers then turn that into the plugin's fail-open behavior: a classifier
 that cannot run must not block the message and must not take the turn down.
+
+### Only one request loads a model
+
+A cold load can involve disk I/O and a download from Hugging Face, and without a
+lock every concurrent turn would start its own. `_CLASSIFIER_LOAD_LOCKS` holds one
+lock per model — different models stay independent — and the wait is bounded at
+`CLASSIFIER_LOAD_WAIT_SECONDS`, currently `5.0`.
+
+That bound is the third way `ClassifierUnavailable` is raised, alongside the
+negative cache and a load that failed outright. A request that times out has
+examined nothing, so it degrades to the usual fail-open behaviour and, on the
+input stage, is left out of the `checks=` list of the log line: it never looked at
+the message.
+
+The timeout exists so a stuck third-party load cannot hold every later request
+indefinitely. Its cost is that during a slow cold start each concurrent turn waits
+the full five seconds before giving up, which is why loading the configured models
+outside the turn is tracked as open work in `DEV/AGENTS/ISSUES_TODO.md`.
 
 ## What happens on repeated messages
 
@@ -221,4 +243,3 @@ Both caches live only for the lifetime of the plugin process.
 They are reset when the plugin reloads, which in practice means when the Cat
 process or container restarts, or when the plugin is reloaded in a way that
 re-imports the module.
-

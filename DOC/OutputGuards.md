@@ -60,8 +60,8 @@ rephrase; a false negative publishes an address.
 Two exemptions apply to the e-mail and phone detectors, on **both** stages.
 
 The address configured as `Help Desk e-mail` is always exempt. Anything listed
-in `Privacy guards: public service contacts` is exempt as well — one contact per
-line, e-mail addresses and phone numbers in the same field.
+in `Privacy guards: allowed contacts` is exempt as well — one contact per line or
+comma separated, e-mail addresses and phone numbers in the same field.
 
 The exemption exists because without it the guard contradicts the deployment.
 The prompt asks the model to point the user at the Help Desk when it cannot
@@ -141,7 +141,7 @@ The corresponding input-side privacy settings are independent:
 Example block line:
 
 ```text
-[rag-guardrails] output blocked, stage='output', category='privacy', verdict='output_personal_data', detected=email; generated reply replaced before delivery
+[rag-guardrails] output blocked, stage='output', category='privacy', verdict='output_personal_data', detected=email, latency_ms=0.21; generated reply replaced before delivery
 ```
 
 As on input:

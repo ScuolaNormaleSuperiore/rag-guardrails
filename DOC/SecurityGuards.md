@@ -83,22 +83,20 @@ If the score were `0.62`, the same label would not block with that threshold.
 The default is `meta-llama/Llama-Prompt-Guard-2-86M`, chosen because this
 project needs both Italian and English support.
 
-The three supported models do not have the same access profile:
+### Access profile of the supported models
 
-- `deepset/deberta-v3-base-injection` is public and can be used without a
-  Hugging Face token
-- the two `meta-llama/*` models are gated and require both approved access on
-  Hugging Face and an authenticated token at runtime
+The three do not share one. Verified against the Hugging Face model cards on
+2026-08-06:
 
-### Licence and access of the supported models
-
-Verified against the Hugging Face model cards on 2026-08-06:
-
-| Model | Licence | Access |
+| Model | Access | Token needed |
 | --- | --- | --- |
-| `meta-llama/Llama-Prompt-Guard-2-86M` | Llama 4 Community License | gated, approval granted manually by Meta |
-| `meta-llama/Llama-Prompt-Guard-2-22M` | Llama 4 Community License | gated, approval granted manually by Meta |
-| `deepset/deberta-v3-base-injection` | MIT | public |
+| `meta-llama/Llama-Prompt-Guard-2-86M` | gated, approval granted manually by Meta | yes |
+| `meta-llama/Llama-Prompt-Guard-2-22M` | gated, approval granted manually by Meta | yes |
+| `deepset/deberta-v3-base-injection` | public | no |
+
+Their licences are deliberately **not** repeated here. `DOC/Licenses.md` is the
+single source for them, and it is the document re-verified before a release — a
+second copy in this file would be the one nobody remembers to update.
 
 The **shipped default model is gated**, but the classifier itself now ships
 disabled. A fresh installation therefore starts on the built-in patterns alone,
@@ -107,9 +105,10 @@ without arranged access, it fails open, the guard falls back to its built-in
 patterns alone, and the condition is reported in the log.
 
 The full licence picture for every model this plugin can run, including the
-offensive-input ones and what each licence implies, is in `README.md`, section
-*License and Legal Notes*. Legal attribution required by Meta lives there too and
-not here.
+offensive-input ones and what each licence implies, is in `DOC/Licenses.md`, which
+carries the per-model table and its verification date. `README.md`, section
+*License and model terms*, holds the short version and the legal attribution
+required by Meta. Neither lives here.
 
 ### Enabling a gated model, the two steps
 
@@ -127,7 +126,7 @@ authorisation failure, so whoever reads the warning does not have to find this
 document:
 
 ```
-[rag-guardrails] failed to load classifier model meta-llama/Llama-Prompt-Guard-2-86M: 401 Client Error … ; it will not be retried until the plugin reloads. This model needs authorised access, so the fix is not technical: 1) accept the model terms at https://huggingface.co/meta-llama/Llama-Prompt-Guard-2-86M and wait for approval, which for the Meta models is granted manually and is not immediate; 2) set the HF_TOKEN environment variable to a Hugging Face read token, or fill in the token field in the plugin settings, then restart the container …
+[rag-guardrails] failed to load classifier model meta-llama/Llama-Prompt-Guard-2-86M: 401 Client Error … ; it will not be retried until the plugin reloads. This model needs authorised access, so the fix is not technical: 1) accept the model terms at https://huggingface.co/meta-llama/Llama-Prompt-Guard-2-86M and wait for approval, which for the Meta models is granted manually and is not immediate; 2) fill in the Hugging Face token field in the plugin settings, then restart the container …
 ```
 
 That guidance is appended only when the error text looks like an authorisation
@@ -137,36 +136,10 @@ the reader after the wrong problem.
 
 ### Hugging Face token handling
 
-The plugin supports three ways to provide a token for gated models, in this order
-of precedence:
-
-1. `HF_TOKEN` environment variable
-2. `HUGGING_FACE_HUB_TOKEN` environment variable, the legacy name `huggingface_hub` still reads
-3. `Security guard: Hugging Face token` in the plugin admin settings
-
-Both environment variables are checked by the plugin itself, and that is not
-redundant with what the library does: passing no token would let
-`huggingface_hub` find them on its own, but then the admin-panel field would take
-precedence over the environment, which is the opposite of what this order
-promises.
-
-This is deliberate:
-
-- deployments that already manage secrets outside the plugin can keep doing so
-- installations that prefer a plugin-local configuration can still use the
-  admin setting
-
-The recommended operating model for publication is therefore explicit:
-
-1. prefer `HF_TOKEN` in the environment for any real deployment
-2. treat `HUGGING_FACE_HUB_TOKEN` only as a legacy compatibility path
-3. use the admin-panel field only as a weaker fallback for local or temporary setups
-
-The reason is not cosmetic. The environment path keeps the token out of
-`settings.json`, while the admin-panel field stores it there in plain text under
-the plugin directory. `settings.json` is ignored by Git, so this is not a source
-control leak by itself, but it is still persistence on disk and should be chosen
-deliberately rather than by accident.
+The plugin reads a token for gated models only from `Security guard: Hugging Face
+token` in the plugin admin settings. It stores that value in plain text in
+`settings.json` under the plugin directory. The file is ignored by Git, but it
+must still be excluded from backups, container copies and support snapshots.
 
 The token is used only to load gated classifier models. Public models do not
 need it.
@@ -190,6 +163,23 @@ If model loading, dependency import, or inference fails:
 
 This keeps the chatbot available even when the classifier runtime is not.
 
+#### A turn can also give up waiting for a load
+
+There is a fourth way in, and it is the only one that leaves nothing broken
+behind. Only one request loads a given model; the others wait for it, and the wait
+is bounded at `CLASSIFIER_LOAD_WAIT_SECONDS`, currently `5.0`. A request that
+reaches that bound raises `ClassifierUnavailable` and fails open exactly like the
+others.
+
+Nothing is wrong in that case: the load may well succeed a moment later, and the
+next message finds the pipeline cached. What it costs is the wait itself, paid
+inside `fast_reply` by every turn arriving during a cold start. Removing it means
+loading the configured models outside the turn, which is tracked as open work in
+`DEV/AGENTS/ISSUES_TODO.md`.
+
+The full mechanism is in `DOC/ClassifierCache.md`, section *Only one request loads
+a model*.
+
 #### A failed model is not retried
 
 When a model fails to load, the failure is remembered for the lifetime of the
@@ -203,9 +193,9 @@ would depend on Hugging Face's response time, and on an unreachable Hub, on the
 timeout. Measured on three clean messages in that configuration, the failure path
 went from nine log lines to three, all of them on the first message.
 
-Retrying could not help anyway: the token comes from the settings or from
-`HF_TOKEN`, and neither changes without the plugin reloading — which is also what
-clears both the failure and the successful pipelines.
+Retrying could not help anyway: the token comes from the settings, and changing
+it requires a plugin reload. The reload also clears failed and successful
+pipelines.
 
 Two consequences worth knowing:
 

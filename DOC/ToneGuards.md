@@ -38,7 +38,12 @@ retrieval or generation. It runs on `fast_reply`, so a refused message:
 This is the same early-stop path used by the length, privacy and prompt-injection
 guards.
 
-### It is the only check that ships switched off
+### It is the only guard family that ships uncovered
+
+Both model-based checks ship switched off — `detect_prompt_injection_classifier`
+defaults to `False` too — but this is the only one whose whole category is left
+uncovered by that default, because the security guard keeps its built-in patterns
+and the tone guard has no deterministic half.
 
 `detect_offensive_input_classifier` defaults to `False`. That is a decision, not an
 oversight, and it has two reasons:
@@ -138,15 +143,19 @@ has to stop insults and threats.
 
 ### Supported models and their labels
 
-| Model | Blocking classes | Licence |
-| --- | --- | --- |
-| `IMSyPP/hate_speech_multilingual` — **default** | `offensive`, `violent` | MIT |
-| `patriciacarla/HS-multilingual-DNR` | `offensive`, `violent` | Apache-2.0 |
-| `textdetox/bert-multilingual-toxicity-classifier` | `toxic` | OpenRAIL++ |
+| Model | Blocking classes |
+| --- | --- |
+| `IMSyPP/hate_speech_multilingual` — **default** | `offensive`, `violent` |
+| `patriciacarla/HS-multilingual-DNR` | `offensive`, `violent` |
+| `textdetox/bert-multilingual-toxicity-classifier` | `toxic` |
 
-All three are public: no Hugging Face token is needed. Licences were verified
-against the model cards on 2026-08-06 and the full picture, including what
-OpenRAIL++ implies, is in `README.md`, section *License and Legal Notes*.
+All three are public: no Hugging Face token is needed.
+
+Their licences are deliberately **not** repeated here. `DOC/Licenses.md` is the
+single source for them, and it carries what matters before enabling one: the
+verification date, and the fact that the third is OpenRAIL++ rather than plainly
+permissive — the only one of the three that attaches behavioural use restrictions
+to be passed on downstream.
 
 **The labels these models return are technical, not semantic.** All three expose
 `LABEL_0`, `LABEL_1`, … through `id2label`; the readable class names of the model
@@ -181,9 +190,18 @@ reachable, naming the labels it received and what it expected. Reported once per
 model, and never raised: a mapping problem must not take down the hook that runs
 before everything else.
 
-While a model is in that state it is also dropped from the `checks=` list of the
-`INFO` line for an allowed message. A check that cannot block must not appear as
-coverage.
+**The warning is the only signal of that state, and that is worth knowing before
+relying on it.** A model whose labels do not map still *runs*: the mismatch is
+logged, the classification proceeds, and the check reports that it examined the
+message — so it keeps appearing in the `checks=` list of the `INFO` line for an
+allowed message, exactly as a working model would. Only a classifier that
+*raises* — a failed load, or a load this turn gave up waiting for — is dropped
+from that list.
+
+That asymmetry is deliberate rather than an oversight: `checks=` answers «did
+this check look at the message», which a mismatched model did. Whether it could
+have blocked anything is what the `WARNING` is for. If the two are ever merged,
+it is the warning that has to feed the list, not the other way round.
 
 ### Error policy
 
@@ -232,4 +250,3 @@ it.
 - The register of the *assistant's* answer is not checked here: that is
   `output_tone`, which is an open issue in the same category and not built.
 - No per-class thresholds and no GPU selection.
-

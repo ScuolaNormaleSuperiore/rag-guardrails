@@ -494,7 +494,7 @@ class TestPromptInjectionGuard:
         )
         captured = {}
 
-        def fake_classifier(text, model_name, threshold, token=None):
+        def fake_classifier(text, model_name, threshold, token=False):
             captured["model_name"] = model_name
             captured["threshold"] = threshold
             captured["token"] = token
@@ -506,7 +506,10 @@ class TestPromptInjectionGuard:
 
         assert captured["model_name"] == "meta-llama/Llama-Prompt-Guard-2-86M"
         assert captured["threshold"] == 0.85
-        assert captured["token"] is None
+        # `False`, not `None`: with no token configured the plugin passes the
+        # value that disables `huggingface_hub`'s own implicit resolution, so it
+        # cannot pick up an ambient credential the administrator never entered.
+        assert captured["token"] is False
 
     @pytest.mark.parametrize("limit", [0, 321, 5000])
     def test_the_classifier_is_not_bound_to_the_length_guard(
@@ -539,12 +542,10 @@ class TestPromptInjectionGuard:
         send(cat, "This message reaches the classifier path")
 
         assert captured["arguments"] == sorted(
-            ("meta-llama/Llama-Prompt-Guard-2-86M", 0.85, None), key=repr
+            ("meta-llama/Llama-Prompt-Guard-2-86M", 0.85, False), key=repr
         )
 
-    def test_hf_token_environment_takes_precedence_over_admin_setting(
-        self, monkeypatch
-    ):
+    def test_admin_hf_token_is_used_even_when_environment_is_set(self, monkeypatch):
         cat = make_cat(
             {
                 "detect_prompt_injection_custom": False,
@@ -560,82 +561,32 @@ class TestPromptInjectionGuard:
 
         monkeypatch.setattr(guards, "classify_prompt_injection", fake_classifier)
         monkeypatch.setenv("HF_TOKEN", "hf_env_token")
-
-        send(cat, "This message reaches the classifier path")
-
-        assert captured["token"] == "hf_env_token"
-
-    def test_the_legacy_environment_variable_is_honoured_too(self, monkeypatch):
-        # `HUGGING_FACE_HUB_TOKEN` is the older name `huggingface_hub` still reads.
-        # Checking it here is not redundant with the library: passing no token would
-        # let the library find it, but the admin field would then win over the
-        # environment, which is the opposite of the documented precedence.
-        cat = make_cat(
-            {
-                "detect_prompt_injection_custom": False,
-                "detect_prompt_injection_classifier": True,
-                "huggingface_token": "hf_admin_token",
-            }
-        )
-        captured = {}
-
-        def fake_classifier(text, model_name, threshold, token=None):
-            captured["token"] = token
-            return {"triggered": False, "label": "BENIGN", "score": 0.01}
-
-        monkeypatch.setattr(guards, "classify_prompt_injection", fake_classifier)
-        monkeypatch.delenv("HF_TOKEN", raising=False)
         monkeypatch.setenv("HUGGING_FACE_HUB_TOKEN", "hf_legacy_token")
-
-        send(cat, "This message reaches the classifier path")
-
-        assert captured["token"] == "hf_legacy_token"
-
-    def test_hf_token_wins_over_the_legacy_variable(self, monkeypatch):
-        cat = make_cat(
-            {
-                "detect_prompt_injection_custom": False,
-                "detect_prompt_injection_classifier": True,
-            }
-        )
-        captured = {}
-
-        def fake_classifier(text, model_name, threshold, token=None):
-            captured["token"] = token
-            return {"triggered": False, "label": "BENIGN", "score": 0.01}
-
-        monkeypatch.setattr(guards, "classify_prompt_injection", fake_classifier)
-        monkeypatch.setenv("HF_TOKEN", "hf_current_token")
-        monkeypatch.setenv("HUGGING_FACE_HUB_TOKEN", "hf_legacy_token")
-
-        send(cat, "This message reaches the classifier path")
-
-        assert captured["token"] == "hf_current_token"
-
-    def test_admin_hf_token_is_used_when_environment_is_missing(self, monkeypatch):
-        cat = make_cat(
-            {
-                "detect_prompt_injection_custom": False,
-                "detect_prompt_injection_classifier": True,
-                "huggingface_token": "hf_admin_token",
-            }
-        )
-        captured = {}
-
-        def fake_classifier(text, model_name, threshold, token=None):
-            captured["token"] = token
-            return {"triggered": False, "label": "BENIGN", "score": 0.01}
-
-        monkeypatch.setattr(guards, "classify_prompt_injection", fake_classifier)
-        # Both variables, not just the current one: the plugin reads the legacy
-        # name too, so clearing one would leave this test passing only on a machine
-        # where the other happens to be unset.
-        for variable in guards.HUGGINGFACE_TOKEN_VARIABLES:
-            monkeypatch.delenv(variable, raising=False)
 
         send(cat, "This message reaches the classifier path")
 
         assert captured["token"] == "hf_admin_token"
+
+    def test_missing_admin_token_disables_environment_tokens(self, monkeypatch):
+        cat = make_cat(
+            {
+                "detect_prompt_injection_custom": False,
+                "detect_prompt_injection_classifier": True,
+            }
+        )
+        captured = {}
+
+        def fake_classifier(text, model_name, threshold, token=None):
+            captured["token"] = token
+            return {"triggered": False, "label": "BENIGN", "score": 0.01}
+
+        monkeypatch.setattr(guards, "classify_prompt_injection", fake_classifier)
+        monkeypatch.setenv("HF_TOKEN", "hf_env_token")
+        monkeypatch.setenv("HUGGING_FACE_HUB_TOKEN", "hf_legacy_token")
+
+        send(cat, "This message reaches the classifier path")
+
+        assert captured["token"] is False
 
     def test_classifier_failure_is_fail_open(self, monkeypatch):
         cat = make_cat(
@@ -1632,7 +1583,6 @@ class TestSettingsModel:
         lines = []
         for level in ("info", "warning", "debug", "error"):
             monkeypatch.setattr(guards.log, level, lines.append, raising=False)
-        monkeypatch.setenv("HF_TOKEN", token)
         guards._ANNOUNCED_GUARD_SUMMARY = None
         guards._ANNOUNCED_CLASSIFIER_FAILURE = None
         guards._ANNOUNCED_OFFENSIVE_CLASSIFIER_FAILURE = None

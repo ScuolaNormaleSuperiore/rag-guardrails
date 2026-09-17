@@ -62,9 +62,8 @@ class ClassifierUnavailable(RuntimeError):
 REDACTED = "***redacted***"
 
 # Any token-shaped string. Needed on top of replacing the token we were handed,
-# because a credential can reach an exception text from somewhere we never saw it:
-# the library's own cache file, or an environment variable read by
-# `huggingface_hub` rather than by us.
+# because a credential can reach an exception text from somewhere we never saw it,
+# such as a request URL or the library's own cache file.
 _TOKEN_SHAPED = re.compile(r"hf_[A-Za-z0-9]{8,}")
 
 
@@ -77,9 +76,8 @@ def redact_secrets(text: str, token: str | None = None) -> str:
     every version of every dependency for what it puts in an exception is not a
     strategy; redacting on the way out is.
 
-    Two passes, and both are needed. The exact value catches a token that does not
-    look like one — `HF_TOKEN` can hold anything. The pattern catches one we were
-    never given.
+    Two passes, and both are needed. The exact value catches a configured token
+    that does not look like one. The pattern catches one we were never given.
     """
     if token:
         text = text.replace(token, REDACTED)
@@ -122,8 +120,8 @@ def access_remediation(model_name: str, error: Exception) -> str:
         f"1) accept the model terms at https://huggingface.co/{model_name} and wait "
         f"for approval, which for the Meta models is granted manually and is not "
         f"immediate; "
-        f"2) set the HF_TOKEN environment variable to a Hugging Face read token, or "
-        f"fill in the token field in the plugin settings, then restart the container "
+        f"2) fill in the Hugging Face token field in the plugin settings, then "
+        f"restart the container "
         f"— the failure is remembered and not retried until the plugin reloads. "
         f"A model that needs no authentication can be selected instead from the "
         f"plugin settings, and takes effect immediately."
@@ -145,7 +143,7 @@ def _classifier_load_lock(model_name: str):
         return _CLASSIFIER_LOAD_LOCKS.setdefault(model_name, threading.Lock())
 
 
-def get_pipeline(model_name: str, token: str | None = None, **pipeline_kwargs):
+def get_pipeline(model_name: str, token: str | bool = False, **pipeline_kwargs):
     """Return the cached text-classification pipeline for `model_name`.
 
     Raises `ClassifierUnavailable` for a model whose load already failed, and
@@ -292,4 +290,3 @@ def model_labels(pipeline) -> tuple[str, ...]:
     except AttributeError:  # pragma: no cover - defensive, all models carry it
         return ()
     return tuple(str(id2label[index]) for index in sorted(id2label))
-

@@ -92,7 +92,7 @@ def classify_prompt_injection(
     text: str,
     model_name: str = DEFAULT_PROMPT_INJECTION_CLASSIFIER_MODEL,
     threshold: float = 0.85,
-    token: str | None = None,
+    token: str | bool = False,
 ) -> dict[str, str | float | bool | None]:
     """Classify a message and decide whether it must be blocked.
 

@@ -24,8 +24,9 @@ build context, so every plugin edit invalidates `COPY ./cat` and the rebuild
 reinstalls the dependency stack of every plugin, `torch` included — fifteen
 minutes for a package of a few megabytes.
 
-**What that removal cost is written down in `DEV/AGENTS/ISSUES_TODO.md`**, because
-it is a real loss and not a cleanup: nothing verifies the secret scanner's
+**What that removal cost is written down in `DEV/AGENTS/ISSUES_TODO.md`**, as
+*Nothing tests the secret scanner, now the last defence for the only token store*,
+because it is a real loss and not a cleanup: nothing verifies the secret scanner's
 regular expressions any more, and this repository already had two patterns that
 silently matched nothing for months. Those tests are how that was found.
 
@@ -105,7 +106,7 @@ No `PYTHONPATH` is needed: `pytest.ini` declares `pythonpath = . /app`, where `.
 
 Verification against a real instance is currently manual: activate the plugin, send messages through `POST /message`, and read `docker compose logs -f cheshire-cat-core` to confirm which code path ran. A correct-looking answer does not prove it came from this plugin; the log lines do.
 
-This tier matters because it catches what the other two cannot. The interaction with the `Rate Limiter` plugin is the case in point: its checks used to intercept messages before this plugin ever saw them, and nothing in the code of either plugin showed it. The hook priority now settles who answers, and a unit test guards the priority, but the ordering itself is only ever confirmed on a running instance.
+This tier matters because it catches what the other two cannot. The interaction with the `Rate Limiter` plugin is the case in point: its checks used to intercept messages before this plugin ever saw them, and nothing in the code of either plugin showed it. The hook priority now settles who answers, and an integration test guards the priority — it lives in `tests/integration/test_hooks.py`, because reading a hook's priority means importing the module that registers it, and that imports `cat` — but the ordering itself is only ever confirmed on a running instance.
 
 The same tier is where another plugin's side effects show up. Above its own `max_prompt_length`, Rate Limiter still records an infraction and suspends the user for 5, 15 or 60 minutes, silently blocking their next legitimate messages, even though the reply delivered is this plugin's. No test can see that either.
 

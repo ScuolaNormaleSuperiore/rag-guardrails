@@ -48,13 +48,14 @@ Examples:
 
 `category` says **what kind of risk or problem** the guard addresses.
 
-Current categories:
+Categories, with the constant that carries each one in `checks.py`:
 
-- `limits`
-- `privacy`
-- `security`
-- `tone`
-- `quality`
+- `limits` — `CATEGORY_LIMITS`
+- `privacy` — `CATEGORY_PRIVACY`
+- `security` — `CATEGORY_SECURITY`
+- `tone` — `CATEGORY_TONE`
+- `quality` — **reserved, not in the code yet**: no constant and no verdict uses
+  it, because every check that would carry it is planned rather than built
 
 Meaning of each category:
 
@@ -128,10 +129,13 @@ Planned output examples:
 | `output` | `quality` | `output_language_mismatch` |
 | `output` | `quality` | `output_groundedness` |
 
-`privacy` and `tone` each carry a verdict on both stages, which is the clearest
-demonstration that the axes are orthogonal and not nested: the category says what
-kind of problem it is, the stage says where it was caught, and neither is derived
-from the other.
+`privacy` carries a verdict on both stages, which is the clearest demonstration
+that the axes are orthogonal and not nested: the category says what kind of
+problem it is, the stage says where it was caught, and neither is derived from
+the other. `tone` is on its way to the same shape — `offensive_input` exists on
+`input`, `output_tone` is planned and not built — so today it demonstrates the
+other half of the point: a category is not tied to the stage it happens to have
+been introduced on.
 
 ## Naming rules
 

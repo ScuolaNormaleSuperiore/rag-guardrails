@@ -207,7 +207,7 @@ class RagGuardrailsSettings(BaseModel):
 
     detect_input_iban: bool = Field(
         default=True,
-        title="Input privacy guard: IBAN",
+        title="Input privacy guard: block IBAN",
         description="Block incoming messages containing a checksum-valid IBAN.",
     )
 
@@ -296,7 +296,7 @@ class RagGuardrailsSettings(BaseModel):
     huggingface_token: str = Field(
         default="",
         title="Security guard: Hugging Face token",
-        description="Optional token for gated models; prefer the HF_TOKEN environment variable.",
+        description="Optional read token for gated models; stored in the plugin settings.",
     )
 
     prompt_injection_detected: str = Field(

@@ -164,7 +164,7 @@ def classify_offensive_input(
     text: str,
     model_name: str = DEFAULT_OFFENSIVE_INPUT_CLASSIFIER_MODEL,
     threshold: float = DEFAULT_OFFENSIVE_INPUT_CLASSIFIER_THRESHOLD,
-    token: str | None = None,
+    token: str | bool = False,
 ) -> dict[str, str | float | bool | None]:
     """Classify a message and decide whether it must be blocked.
 

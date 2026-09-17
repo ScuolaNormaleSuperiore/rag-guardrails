@@ -93,7 +93,7 @@ block.
 ### Output privacy
 
 ```text
-[rag-guardrails] output blocked, stage='output', category='privacy', verdict='output_personal_data', detected=email; generated reply replaced before delivery
+[rag-guardrails] output blocked, stage='output', category='privacy', verdict='output_personal_data', detected=email, latency_ms=0.21; generated reply replaced before delivery
 ```
 
 ### Offensive input
@@ -182,6 +182,32 @@ plugin, so a second episode is announced again instead of being swallowed.
 The reason is redacted before it is written. A `ValidationError` quotes the input
 that failed validation, and one of the fields it can quote is the Hugging Face
 token.
+
+## The remaining lines, and where they are described
+
+The lines above are the ones a normal turn produces. Six others exist, all of them
+reporting a degradation rather than a turn, and each is documented where its
+mechanism is:
+
+| Line | Level | Described in |
+| --- | --- | --- |
+| `prompt-injection classifier unavailable (…), continuing without blocking; …` | `WARNING` | `DOC/SecurityGuards.md`, *Error policy* |
+| `offensive-input classifier unavailable (…), continuing without blocking; no guard covers: tone …` | `WARNING` | `DOC/ToneGuards.md`, *Error policy* |
+| `prompt-injection classifier model … returns labels …, not the expected blocking label …` | `WARNING` | `DOC/ClassifierLabels.md` |
+| `offensive-input classifier model … returns labels …, none of which maps to a blocking class …` | `WARNING` | `DOC/ClassifierLabels.md` |
+| `loading classifier model … into memory` / `… loaded and cached in memory` / `failed to load classifier model …` / `classifier pipeline cache hit for model …` | `INFO`, the failure at `WARNING` | `DOC/ClassifierCache.md` |
+| `no reply configured for verdict '…', falling back to normal execution` | `WARNING` | Never expected: a verdict with no entry in `REPLY_SETTING_BY_VERDICT` is a defect, and the turn continues normally rather than sending an empty message |
+
+One property holds across all of them: none carries the message text, on any path.
+
+Deduplication does not. The two `classifier unavailable` warnings and the two
+label-mismatch warnings are written once — the state they report cannot change
+until the plugin reloads, so repeating them per message would bury the log exactly
+when it is needed. The model-loading lines are not deduplicated and do not need to
+be, because loading happens once per model anyway — except `classifier pipeline
+cache hit`, which is written on **every** message that reaches a classifier and is
+at `INFO` deliberately while the feature is being evaluated. `no reply configured`
+is not deduplicated either, because it cannot occur outside a defect.
 
 ## Logging boundaries
 

@@ -235,7 +235,7 @@ class TestAccessRemediation:
         )
 
         assert f"https://huggingface.co/{self.GATED}" in text
-        assert "HF_TOKEN" in text
+        assert "plugin settings" in text
         assert "restart" in text
 
     @pytest.mark.parametrize(
@@ -314,9 +314,8 @@ class TestRedactSecrets:
         assert runtime.REDACTED in redacted
 
     def test_a_token_that_does_not_look_like_one_is_removed_by_value(self):
-        # `HF_TOKEN` holds whatever the deployment puts in it, and the pattern
-        # cannot recognise an arbitrary string. This is why the exact value is
-        # replaced as well.
+        # A configured token can hold anything, and the pattern cannot recognise
+        # an arbitrary string. This is why the exact value is replaced as well.
         odd = "not-shaped-like-a-hugging-face-token-at-all"
         text = f"authentication failed for {odd}"
 

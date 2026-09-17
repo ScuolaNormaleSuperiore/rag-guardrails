@@ -35,7 +35,7 @@ PLUGIN_METADATA_FILE = REPO_ROOT / "plugin.json"
 # material, so shipping those weights alongside this code would create a real
 # incompatibility. Downloading them at runtime, under the terms the installer
 # accepts directly with the publisher, is what keeps the two apart. See
-# `README.md`, section *License and Legal Notes*.
+# `README.md`, section *License and model terms*, and `DOC/Licenses.md`.
 INCLUDED_FILES = (
     "plugin.json",
     "README.md",

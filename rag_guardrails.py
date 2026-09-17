@@ -41,7 +41,6 @@ conversation history.
 
 """
 
-import os
 import time
 from typing import NamedTuple
 
@@ -611,9 +610,10 @@ def announce_classifier_failure(
 
     # The exception text belongs to a third-party library: redact before it is
     # formatted into a line that goes to the log at WARNING.
+    token = resolve_huggingface_token(settings)
     reported = (
         f"{settings.prompt_injection_classifier_model.value}: "
-        f"{redact_secrets(str(error), resolve_huggingface_token(settings))}"
+        f"{redact_secrets(str(error), token if isinstance(token, str) else None)}"
     )
     if reported == _ANNOUNCED_CLASSIFIER_FAILURE:
         return
@@ -694,9 +694,10 @@ def announce_offensive_classifier_failure(
     """
     global _ANNOUNCED_OFFENSIVE_CLASSIFIER_FAILURE
 
+    token = resolve_huggingface_token(settings)
     reported = (
         f"{settings.offensive_input_classifier_model.value}: "
-        f"{redact_secrets(str(error), resolve_huggingface_token(settings))}"
+        f"{redact_secrets(str(error), token if isinstance(token, str) else None)}"
     )
     if reported == _ANNOUNCED_OFFENSIVE_CLASSIFIER_FAILURE:
         return
@@ -758,28 +759,10 @@ def detect_offensive_input(
     )
 
 
-# The environment variables Hugging Face itself honours, in its own order of
-# precedence: `HF_TOKEN` is current, `HUGGING_FACE_HUB_TOKEN` is the legacy name
-# `huggingface_hub` still reads. Both are checked here for one specific reason —
-# passing `token=None` would let the library fall back to its own resolution and
-# find them anyway, but the admin-panel field would then take precedence over an
-# environment variable, which is the opposite of what this function promises.
-HUGGINGFACE_TOKEN_VARIABLES = ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN")
-
-
-def resolve_huggingface_token(settings: RagGuardrailsSettings) -> str | None:
-    """Return the Hugging Face token to use for gated models, if any.
-
-    Environment variables take precedence over admin settings so deployments can
-    keep secrets out of the plugin configuration when they want to.
-    """
-    for variable in HUGGINGFACE_TOKEN_VARIABLES:
-        token = os.getenv(variable, "").strip()
-        if token:
-            return token
-
+def resolve_huggingface_token(settings: RagGuardrailsSettings) -> str | bool:
+    """Return the configured token, or disable implicit Hub authentication."""
     token = settings.huggingface_token.strip()
-    return token or None
+    return token or False
 
 
 @hook("fast_reply", priority=INPUT_GUARD_PRIORITY)

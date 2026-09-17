@@ -96,14 +96,11 @@ models need none.
 
 | Path | Storage | Status |
 | --- | --- | --- |
-| `HF_TOKEN` environment variable | Container environment | **Recommended.** Takes precedence over everything else |
-| `HUGGING_FACE_HUB_TOKEN` environment variable | Container environment | Legacy name, also honoured |
-| Admin panel field | `settings.json`, **in clear text**, in the plugin folder | Accepted with its risk on 2026-09-11. The admin panel of 1.9.2 cannot mask a field — verified against the shipped admin bundle, which renders only text and number inputs |
+| Admin panel field | `settings.json`, **in clear text**, in the plugin folder | The only supported token source. The admin panel of 1.9.2 cannot mask a field — verified against the shipped admin bundle, which renders only text and number inputs |
 
-> **Open question 3, for the security contact.** Is the clear-text field
-> acceptable given that `settings.json` must then be excluded from backups,
-> container copies and support snapshots, or should the deployment forbid it and
-> use the environment variable only?
+> **Decision, 2026-09-17.** The clear-text admin field is the only supported
+> token source. Restrict access to `settings.json` and exclude it from backups,
+> container copies and support snapshots.
 
 ## 6. What is already settled
 
@@ -111,7 +108,7 @@ Recorded so the review does not spend time re-deriving it.
 
 - **Licensing.** Every one of the six models the plugin can run has its licence
   documented and verified with the date of verification, in `README.md` under
-  *License and Legal Notes* and in `DOC/Licenses.md`. Two of them are not free
+  *License and model terms* and in `DOC/Licenses.md`. Two of them are not free
   software, and both are gated.
 - **No model weights are distributed.** The release package contains code and
   documentation only. This is a licensing boundary, not a size decision: the code
@@ -160,7 +157,7 @@ a live instance. They are the practical half of this gate.
 | --- | --- | --- |
 | 1 | The guards behave as documented against the retrieval values and the prompt actually configured in `Cat Advanced Tools` | Send the checklist messages in `DOC/TestingCode.md` and read `docker compose logs -f cheshire-cat-core` |
 | 2 | The tone guard works through the admin panel — it has **never** been switched on that way, and it ships off, so the path an administrator actually takes is the one path never taken | The five-step procedure in `DOC/TestingCode.md`, section *Manual check still outstanding: the tone guard* |
-| 3 | The hook order against `Rate Limiter` and `Hate Defender`, which share the same hook | Only visible on a running instance; the log lines say who answered |
+| 3 | The hook order against `Rate Limiter`, the only other plugin on the instance sharing `fast_reply` since `Hate Defender` was removed | Only visible on a running instance; the log lines say who answered |
 | 4 | What the chatbot answers when the document search finds nothing | Tracked as its own backlog issue: it produces a number, not a tick |
 | 5 | Whether answers come back in the language of the question | Tracked as its own backlog issue, same reason |
 | 6 | The privacy guard against a spaced address, fixed on 2026-09-11 | Ask for an answer that repeats an address, confirm the replacement reply and the `output blocked` line |

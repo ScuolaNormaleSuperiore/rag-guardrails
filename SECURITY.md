@@ -63,9 +63,9 @@ README, under
   and no plugin can prevent that. Log retention is a deployment decision.
 - **The local classifiers fail open.** If a model cannot be loaded, the guard
   does not block; the deterministic checks still run.
-- **A Hugging Face token entered in the admin panel is stored in plain text in
-  `settings.json`.** Pass it through the `HF_TOKEN` environment variable
-  instead. That the weaker path exists at all is tracked as a known issue.
+- **A Hugging Face token is stored in plain text in `settings.json`.** The plugin
+  reads tokens only from its admin setting, so restrict access to that file and
+  exclude it from backups and support bundles.
 - **The plugin verifies no property of the answer's content** beyond personal
   data: not evidence sufficiency, not groundedness, not source consistency, not
   the language of the reply.
