@@ -5,11 +5,9 @@ Notable changes to `RAG Guardrails`. The format follows
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-
 ## [1.0.2] - 2026-09-21
 - Bug-fixing: Fixed bugs and security issues
 - Updated the documentation
-
 
 ## [1.0.1] - 2026-09-10
 - Bug-fixing: Fixed bugs and security issues

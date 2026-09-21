@@ -263,10 +263,12 @@ During model loading, the runtime also logs, at `INFO`:
 - when a classifier pipeline is found already cached in memory
 
 On the first successful use of each configured model, the plugin also checks
-that the model actually declares the expected blocking label for that model —
-`MALICIOUS` for the Meta models, `INJECTION` for the DeBERTa one. If not, it
-logs a `WARNING` saying the classifier is enabled but cannot block anything
-until its label mapping is updated.
+that the model declares the raw label mapped to `MALICIOUS`: `LABEL_1` for both
+Meta models and `INJECTION` for DeBERTa. The classifier translates the raw
+label before applying the threshold, so logs and hook results use the shared
+semantic names `BENIGN` and `MALICIOUS`. If the raw blocking label is absent,
+the plugin logs a `WARNING` saying the classifier is enabled but cannot block
+anything until its label mapping is updated.
 
 A pipeline found already cached in memory is currently logged at `INFO` too.
 That is acceptable for v1 because it makes classifier reuse visible while the

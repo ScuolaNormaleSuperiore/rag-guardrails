@@ -25,25 +25,39 @@ Whenever a classifier runs, there are two separate questions:
 The first question is about the model's declared output space.
 The second is about the plugin's policy.
 
-For the prompt-injection guard, the policy is "one expected blocking label per
-model". For the offensive-input guard, the policy is "a set of blocking classes
-per model, aggregated by score".
+For the prompt-injection guard, the policy is "translate the top raw label into
+`BENIGN` or `MALICIOUS`, then compare its score with the threshold". For the
+offensive-input guard, the policy is "translate every raw label, then aggregate
+the scores of a set of blocking classes".
 
 ## Prompt-Injection Classifier
 
 Implementation: `prompt_injection_classifier.py`
 
-### Static label mapping
+### Static translation table
 
-The plugin defines one expected blocking label per supported model:
+The models do not expose one uniform vocabulary. The two Meta checkpoints in
+the deployed Transformers stack return generic labels, while DeBERTa carries
+readable labels in its configuration. The plugin translates both shapes into
+the same semantic classes:
 
-| Model | Expected blocking label |
-| --- | --- |
-| `meta-llama/Llama-Prompt-Guard-2-86M` | `MALICIOUS` |
-| `meta-llama/Llama-Prompt-Guard-2-22M` | `MALICIOUS` |
-| `deepset/deberta-v3-base-injection` | `INJECTION` |
+| Model | Raw label | Semantic class |
+| --- | --- | --- |
+| `meta-llama/Llama-Prompt-Guard-2-86M` | `LABEL_0` | `BENIGN` |
+| `meta-llama/Llama-Prompt-Guard-2-86M` | `LABEL_1` | `MALICIOUS` |
+| `meta-llama/Llama-Prompt-Guard-2-22M` | `LABEL_0` | `BENIGN` |
+| `meta-llama/Llama-Prompt-Guard-2-22M` | `LABEL_1` | `MALICIOUS` |
+| `deepset/deberta-v3-base-injection` | `LEGIT` | `BENIGN` |
+| `deepset/deberta-v3-base-injection` | `INJECTION` | `MALICIOUS` |
 
-This mapping is the table `PROMPT_INJECTION_CLASSIFIER_LABELS`.
+`PROMPT_INJECTION_CLASSIFIER_CLASSES` is the translation table.
+`PROMPT_INJECTION_CLASSIFIER_LABELS` is derived from it and records the raw
+blocking label used to verify each loaded model.
+
+The Meta ordering was confirmed by inference on 2026-09-21 against both cached
+checkpoints: a legitimate help-desk question scored above 0.999 on `LABEL_0`,
+and an explicit instruction-override attempt scored above 0.999 on `LABEL_1`.
+The DeBERTa ordering is declared directly by the model's `config.json`.
 
 ### Decision rule
 
@@ -52,9 +66,9 @@ When the classifier runs:
 1. the plugin gets the model result
 2. it takes the **top** label only
 3. it normalizes that label with `strip().upper()`
-4. it compares it to the expected blocking label of that model
+4. it translates the raw label into `BENIGN` or `MALICIOUS`
 5. it blocks only if:
-   - the normalized label equals the expected blocking label
+   - the semantic class is `MALICIOUS`
    - the score is greater than or equal to the configured threshold
 
 So this guard is a **single-label** decision rule.
@@ -62,27 +76,29 @@ So this guard is a **single-label** decision rule.
 Example:
 
 - model: `meta-llama/Llama-Prompt-Guard-2-86M`
-- result: `label="MALICIOUS", score=0.91`
+- raw result: `label="LABEL_1", score=0.91`
+- translated result: `label="MALICIOUS", score=0.91`
 - threshold: `0.85`
 - outcome: block
 
-If the same model returns:
+If the same model returns `LABEL_0`, the translated result is:
 
 - `label="BENIGN", score=0.99`
 
-the message is **not** blocked, because the label does not match the expected
-blocking label, however high its score is.
+the message is **not** blocked, because the semantic class is `BENIGN`, however
+high its score is.
 
 ### Runtime verification of the declared labels
 
 At the first successful use of each configured model, the plugin also checks
-that the model actually declares the expected blocking label in its `id2label`.
+that the model actually declares the raw blocking label derived from the
+translation table in its `id2label`.
 
 That check is:
 
 - read the labels through `model_labels(pipeline)`
 - normalize them to upper case
-- confirm that the expected blocking label is present
+- confirm that the raw label mapped to `MALICIOUS` is present
 
 If the expected label is missing, the plugin writes a `WARNING`.
 
@@ -101,8 +117,8 @@ This is **not** a label-mapping problem.
 
 Example:
 
-- the model declares `BENIGN` and `MALICIOUS`
-- the plugin confirms that `MALICIOUS` exists
+- the model declares `LABEL_0` and `LABEL_1`
+- the plugin confirms that `LABEL_1` maps to `MALICIOUS`
 - but the model still classifies an ordinary insult as `MALICIOUS`
 
 That is a problem of:
@@ -265,10 +281,10 @@ to inspect.
 
 | Situation | What happens |
 | --- | --- |
-| Expected label exists, top label matches, score above threshold | block |
-| Expected label exists, top label matches, score below threshold | allow |
-| Expected label exists, top label does not match | allow |
-| Expected label missing from declared labels | warning, then normal classification still runs |
+| Raw blocking label exists, top label maps to `MALICIOUS`, score above threshold | block |
+| Raw blocking label exists, top label maps to `MALICIOUS`, score below threshold | allow |
+| Raw blocking label exists, top label maps to `BENIGN` | allow |
+| Raw blocking label missing from declared labels | warning, then normal classification still runs |
 | Declared labels unreadable | no warning, normal classification still runs |
 | Model load fails | fail-open, no classification |
 
@@ -286,7 +302,7 @@ to inspect.
 
 | Guard | What the model returns | Plugin mapping | Decision rule | Runtime warning condition |
 | --- | --- | --- | --- | --- |
-| Prompt injection | one top label with score | one expected blocking label per model | block if top label equals expected label and score >= threshold | expected label not present in declared labels |
+| Prompt injection | one top label with score | raw label -> `BENIGN` or `MALICIOUS` | block if the translated top label is `MALICIOUS` and score >= threshold | raw label mapped to `MALICIOUS` not present in declared labels |
 | Offensive input | all labels with scores | raw label -> semantic class, plus blocking set per model | block if the sum of blocking-class scores >= threshold | no declared label maps to any blocking class |
 
 ## Why the two guards differ
@@ -295,7 +311,7 @@ The difference is architectural, not accidental.
 
 Prompt injection is treated as:
 
-- one model-specific blocking label
+- one translated semantic class for the top label
 - one score to compare against one threshold
 
 Offensive input is treated as:
@@ -303,7 +319,7 @@ Offensive input is treated as:
 - several semantic behaviors that all mean "refuse"
 - a sum over the classes that belong to that set
 
-Using the same label-handling strategy for both would be misleading. The plugin
-therefore keeps two separate policies, and verifies each one against the labels
-the loaded model actually declares.
-
+Both guards translate model-specific labels, but their decision policies stay
+separate: prompt injection uses only the top class, while offensive input sums
+several blocking classes. Each policy is verified against the labels the loaded
+model actually declares.

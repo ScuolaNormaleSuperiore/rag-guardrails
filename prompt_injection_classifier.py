@@ -1,8 +1,9 @@
 """Local classifier for prompt-injection attempts.
 
-Only the decision rule lives here: one expected label per model, compared against
-a threshold. The machinery around it — pipeline cache, negative cache on failed
-loads, lazy `transformers` import, fail-open contract — is in
+Only the decision rule lives here: each model's raw labels are translated into
+the shared `BENIGN` / `MALICIOUS` classes, then the malicious score is compared
+against a threshold. The machinery around it — pipeline cache, negative cache
+on failed loads, lazy `transformers` import, fail-open contract — is in
 `classifier_runtime.py`, shared with the offensive-input classifier.
 
 The plugin must keep working when the dependency is missing or the model cannot
@@ -35,6 +36,7 @@ except ImportError:  # pragma: no cover - depends on how the module is loaded
 __all__ = [
     "ClassifierUnavailable",
     "DEFAULT_PROMPT_INJECTION_CLASSIFIER_MODEL",
+    "PROMPT_INJECTION_CLASSIFIER_CLASSES",
     "PROMPT_INJECTION_CLASSIFIER_LABELS",
     "classifier_load_error",
     "classify_prompt_injection",
@@ -44,10 +46,31 @@ __all__ = [
 
 DEFAULT_PROMPT_INJECTION_CLASSIFIER_MODEL = "meta-llama/Llama-Prompt-Guard-2-86M"
 
+PROMPT_INJECTION_CLASSIFIER_CLASSES = {
+    "meta-llama/Llama-Prompt-Guard-2-86M": {
+        "LABEL_0": "BENIGN",
+        "LABEL_1": "MALICIOUS",
+    },
+    "meta-llama/Llama-Prompt-Guard-2-22M": {
+        "LABEL_0": "BENIGN",
+        "LABEL_1": "MALICIOUS",
+    },
+    "deepset/deberta-v3-base-injection": {
+        "LEGIT": "BENIGN",
+        "INJECTION": "MALICIOUS",
+    },
+}
+
+# Kept as the public table of raw labels that can block. Deriving it from the
+# translation table gives settings enumeration, startup validation and the
+# decision rule one source of truth.
 PROMPT_INJECTION_CLASSIFIER_LABELS = {
-    "meta-llama/Llama-Prompt-Guard-2-86M": "MALICIOUS",
-    "meta-llama/Llama-Prompt-Guard-2-22M": "MALICIOUS",
-    "deepset/deberta-v3-base-injection": "INJECTION",
+    model_name: next(
+        raw_label
+        for raw_label, semantic_class in classes.items()
+        if semantic_class == "MALICIOUS"
+    )
+    for model_name, classes in PROMPT_INJECTION_CLASSIFIER_CLASSES.items()
 }
 
 # Models whose declared labels have already been checked, so the verification
@@ -56,7 +79,7 @@ _VERIFIED_MODELS: set[str] = set()
 
 
 def supported_prompt_injection_classifier_models() -> tuple[str, ...]:
-    return tuple(PROMPT_INJECTION_CLASSIFIER_LABELS)
+    return tuple(PROMPT_INJECTION_CLASSIFIER_CLASSES)
 
 
 def _warn_on_label_mismatch(model_name: str, pipeline) -> None:
@@ -102,7 +125,7 @@ def classify_prompt_injection(
     if not text.strip():
         return {"triggered": False, "label": None, "score": 0.0}
 
-    expected_label = PROMPT_INJECTION_CLASSIFIER_LABELS[model_name]
+    label_classes = PROMPT_INJECTION_CLASSIFIER_CLASSES[model_name]
 
     pipeline = get_pipeline(model_name, token=token)
     _warn_on_label_mismatch(model_name, pipeline)
@@ -131,11 +154,11 @@ def classify_prompt_injection(
         return {"triggered": False, "label": None, "score": 0.0}
 
     top = scores[0]
-    label = str(top.get("label", "")).strip().upper()
+    raw_label = str(top.get("label", "")).strip().upper()
+    label = label_classes.get(raw_label, raw_label)
     score = float(top.get("score", 0.0) or 0.0)
     return {
-        "triggered": label == expected_label and score >= threshold,
+        "triggered": label == "MALICIOUS" and score >= threshold,
         "label": label,
         "score": score,
     }
-
