@@ -270,6 +270,15 @@ semantic names `BENIGN` and `MALICIOUS`. If the raw blocking label is absent,
 the plugin logs a `WARNING` saying the classifier is enabled but cannot block
 anything until its label mapping is updated.
 
+A second `WARNING` covers the other half of the same risk. The check above reads
+the labels a model *declares*, once, at load. If a model instead *returns* a
+label the translation table does not know, the plugin lets the message through
+unclassified — the fail-open contract — and says so, naming the unrecognised raw
+label, once per model and label rather than once per message. Both are needed
+because the revision of these models is not pinned: a changed `id2label` can
+leave the declared labels looking correct while the answers stop being
+translatable.
+
 A pipeline found already cached in memory is currently logged at `INFO` too.
 That is acceptable for v1 because it makes classifier reuse visible while the
 feature is being evaluated, but if it proves too noisy under real traffic it

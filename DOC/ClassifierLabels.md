@@ -67,7 +67,9 @@ When the classifier runs:
 2. it takes the **top** label only
 3. it normalizes that label with `strip().upper()`
 4. it translates the raw label into `BENIGN` or `MALICIOUS`
-5. it blocks only if:
+5. if the raw label is not in that model's table, it warns and lets the message
+   through unclassified, without ever reaching the threshold
+6. it blocks only if:
    - the semantic class is `MALICIOUS`
    - the score is greater than or equal to the configured threshold
 
@@ -110,6 +112,32 @@ That warning means:
 - therefore the check cannot block anything reliably
 
 The warning is emitted once per model, not once per message.
+
+### Runtime verification of the returned label
+
+The check above reads what the model **declares**, once, when it loads. A second
+check reads what it **returns**, on every message: if the top raw label is not a
+key of that model's translation table, the plugin
+
+- lets the message through unclassified, which is the fail-open contract
+- reports the raw label it did not recognise, at `WARNING`
+- reports it once per `(model, raw label)` pair, so a model that answers with an
+  unknown label on every message writes one line and not one per turn
+
+The pair, rather than the model alone, is the key on purpose: a second unknown
+label is a second piece of information, and the first one must not hide it.
+
+Both checks are needed because they catch different failures. A model can
+declare exactly the right labels and still answer with something else after a
+revision changes its `id2label` — and the revision of these models is not
+pinned, so that is the realistic path rather than a contrived one.
+
+An unmapped label reaches the result as **itself**, not translated, so the log
+names what the model actually said. That is also why it returns early instead of
+falling through the comparison: the raw label used to be carried forward as if
+it were a semantic class, which was harmless for every label except one — a
+model outside the table answering the literal string `MALICIOUS` blocked on a
+mapping nobody had written.
 
 ### If the labels are correct but the model classifies badly
 
@@ -284,6 +312,7 @@ to inspect.
 | Raw blocking label exists, top label maps to `MALICIOUS`, score above threshold | block |
 | Raw blocking label exists, top label maps to `MALICIOUS`, score below threshold | allow |
 | Raw blocking label exists, top label maps to `BENIGN` | allow |
+| Top label is not in the translation table | warning, then allow unclassified |
 | Raw blocking label missing from declared labels | warning, then normal classification still runs |
 | Declared labels unreadable | no warning, normal classification still runs |
 | Model load fails | fail-open, no classification |
@@ -302,7 +331,7 @@ to inspect.
 
 | Guard | What the model returns | Plugin mapping | Decision rule | Runtime warning condition |
 | --- | --- | --- | --- | --- |
-| Prompt injection | one top label with score | raw label -> `BENIGN` or `MALICIOUS` | block if the translated top label is `MALICIOUS` and score >= threshold | raw label mapped to `MALICIOUS` not present in declared labels |
+| Prompt injection | one top label with score | raw label -> `BENIGN` or `MALICIOUS` | block if the translated top label is `MALICIOUS` and score >= threshold | raw label mapped to `MALICIOUS` not present in declared labels, **or** a returned label absent from the translation table |
 | Offensive input | all labels with scores | raw label -> semantic class, plus blocking set per model | block if the sum of blocking-class scores >= threshold | no declared label maps to any blocking class |
 
 ## Why the two guards differ

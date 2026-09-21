@@ -194,6 +194,7 @@ mechanism is:
 | `prompt-injection classifier unavailable (…), continuing without blocking; …` | `WARNING` | `DOC/SecurityGuards.md`, *Error policy* |
 | `offensive-input classifier unavailable (…), continuing without blocking; no guard covers: tone …` | `WARNING` | `DOC/ToneGuards.md`, *Error policy* |
 | `prompt-injection classifier model … returns labels …, not the expected blocking label …` | `WARNING` | `DOC/ClassifierLabels.md` |
+| `prompt-injection classifier model … returned the label …, which is not in its mapping (…); the message was let through unclassified` | `WARNING` | `DOC/ClassifierLabels.md` |
 | `offensive-input classifier model … returns labels …, none of which maps to a blocking class …` | `WARNING` | `DOC/ClassifierLabels.md` |
 | `loading classifier model … into memory` / `… loaded and cached in memory` / `failed to load classifier model …` / `classifier pipeline cache hit for model …` | `INFO`, the failure at `WARNING` | `DOC/ClassifierCache.md` |
 | `no reply configured for verdict '…', falling back to normal execution` | `WARNING` | Never expected: a verdict with no entry in `REPLY_SETTING_BY_VERDICT` is a defect, and the turn continues normally rather than sending an empty message |
@@ -203,7 +204,10 @@ One property holds across all of them: none carries the message text, on any pat
 Deduplication does not. The two `classifier unavailable` warnings and the two
 label-mismatch warnings are written once — the state they report cannot change
 until the plugin reloads, so repeating them per message would bury the log exactly
-when it is needed. The model-loading lines are not deduplicated and do not need to
+when it is needed. The unmapped-label warning is deduplicated too, but per
+`(model, label)` pair rather than per model: unlike the others it reports
+something the model said, and a second unknown label is a second piece of
+information that the first must not hide. The model-loading lines are not deduplicated and do not need to
 be, because loading happens once per model anyway — except `classifier pipeline
 cache hit`, which is written on **every** message that reaches a classifier and is
 at `INFO` deliberately while the feature is being evaluated. `no reply configured`
