@@ -171,18 +171,18 @@ _PROMPT_INJECTION_PATTERNS = (
 # message cost thirteen seconds of CPU inside `fast_reply`, which is a denial of
 # service on the hook that runs before everything else. The bounds are the ones
 # RFC 5321 already imposes on a mailbox, so no legitimate address stops matching.
-# Spaces are tolerated around the `@`, because `mario.rossi @ example.org` is
-# an address a person reads as one and the detector used to read as none. Three
-# at most, and only spaces and tabs: a newline would let the pattern join two
+# Spaces are tolerated after the `@`, because `mario.rossi@ example.org` is an
+# address a person reads as one and the detector used to read as none. Three at
+# most, and only spaces and tabs: a newline would let the pattern join two
 # unrelated lines into an address that was never written.
 #
-# The tolerance is what it costs to close the gap, and it is not free — `seguici
-# @ comune.pisa` now matches. That direction is the safe one for a privacy
-# guard: a false positive asks the user to rephrase, a false negative publishes
-# a personal address. The matched text is stripped of those spaces before the
-# allowlist is consulted, so a public contact stays exempt however it is spelled.
+# The local part must remain attached to the `@`: a space before it is ordinary
+# prose in help-desk messages, not an address. Up to three spaces or tabs after
+# the `@` are still tolerated, so a reader-visible address is not missed merely
+# because its domain was spaced out. The matched text is stripped of those
+# spaces before the allowlist is consulted.
 _EMAIL_PATTERN = re.compile(
-    r"[A-Za-z0-9._%+\-]{1,64}[ \t]{0,3}@[ \t]{0,3}[A-Za-z0-9.\-]{1,255}\.[A-Za-z]{2,24}"
+    r"[A-Za-z0-9._%+\-]{1,64}@[ \t]{0,3}[A-Za-z0-9.\-]{1,255}\.[A-Za-z]{2,24}"
 )
 
 # Six letters, two year digits, a month letter, two day digits, the four
@@ -558,10 +558,10 @@ def matched_personal_data_kinds(
     # one by this point.
     if detect_email and "@" in text:
         allowed = _allowed_email_addresses(allowed_email, public_contacts)
-        # The spaces the pattern now tolerates are removed before comparing:
-        # `helpdesk @ example.org` has to match the allowlist entry written
-        # without them, or widening the pattern would turn every public contact
-        # back into personal data as soon as someone spaced it out.
+        # The spaces the pattern tolerates after the `@` are removed before
+        # comparing: `helpdesk@ example.org` has to match the allowlist entry
+        # written without them, or a public contact would become personal data
+        # merely because its domain was spaced out.
         found = [
             address.replace(" ", "").replace("\t", "")
             for address in _EMAIL_PATTERN.findall(text)
@@ -712,4 +712,3 @@ def run_input_checks(text: str, config: Any) -> str | None:
         if verdict is not None:
             return verdict
     return None
-

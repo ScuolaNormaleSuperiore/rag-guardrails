@@ -6,11 +6,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 
+## [1.0.2] - 2026-09-21
+- Bug-fixing: Fixed bugs and security issues
+- Updated the documentation
+
 
 ## [1.0.1] - 2026-09-10
 - Bug-fixing: Fixed bugs and security issues
 - Updated the documentation
-
 
 ## [1.0.0] - 2026-09-08
 First public release. The plugin was already running in production before this

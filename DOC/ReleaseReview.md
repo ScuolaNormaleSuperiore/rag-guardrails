@@ -7,11 +7,6 @@ maintains the plugin.
 
 Nothing here is a decision. Each open question says who has to answer it and
 what the answer changes.
-
-Verified against Cheshire Cat AI `1.9.2` and plugin `1.0.1` on 2026-09-11. The
-line references are to the installed core, which is the authority where it and
-the public documentation disagree.
-
 ---
 
 ## 1. What this plugin is, in one paragraph
@@ -160,7 +155,7 @@ a live instance. They are the practical half of this gate.
 | 3 | The hook order against `Rate Limiter`, the only other plugin on the instance sharing `fast_reply` since `Hate Defender` was removed | Only visible on a running instance; the log lines say who answered |
 | 4 | What the chatbot answers when the document search finds nothing | Tracked as its own backlog issue: it produces a number, not a tick |
 | 5 | Whether answers come back in the language of the question | Tracked as its own backlog issue, same reason |
-| 6 | The privacy guard against a spaced address, fixed on 2026-09-11 | Ask for an answer that repeats an address, confirm the replacement reply and the `output blocked` line |
+| 6 | The privacy guard against an address with spacing after `@` | Ask for an answer that repeats `mario.rossi@ example.org`, confirm the replacement reply and the `output blocked` line |
 
 Items 4 and 5 are deliberately not folded into this checklist: inside a list of
 ticks they become lines someone marks as done without measuring anything.

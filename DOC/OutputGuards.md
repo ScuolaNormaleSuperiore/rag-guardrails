@@ -39,21 +39,24 @@ configured independently from input detectors.
 All four run on a Unicode-folded copy of the text: NFKC compatibility
 normalization, plus removal of the format characters — the invisible marks that
 carry no glyph and can sit inside a word. The e-mail pattern additionally
-tolerates up to three spaces or tabs on either side of the `@`.
+tolerates up to three spaces or tabs after the `@`, but requires the local part
+to be immediately before it.
 
 Both are there because the detectors used to read the raw text while the
 prompt-injection patterns read a normalized copy, which made the guard
-protecting the more sensitive value the weaker of the two: `mario.rossi @
+protecting the more sensitive value the weaker of the two: `mario.rossi@
 example.org` and the fullwidth `mario.rossi＠example.org` were delivered to the
 user, and the log recorded `checks=email+…` as though they had been examined.
 The fold is applied for matching only — the reply and the log keep working from
-the original text — and the match is stripped of those spaces before the
+the original text — and the match is stripped of those post-`@` spaces before the
 allowlist below is consulted, so a public contact stays exempt however it is
 written.
 
-The tolerance has a price, and it is the intended direction for a privacy
-guard: `seguici @ comune.pisa` now matches. A false positive asks the user to
-rephrase; a false negative publishes an address.
+The detector deliberately does not treat text before a separated `@` as a
+local part: `seguici @comune.pisa` and `credenziali @sns.it` are ordinary prose,
+not addresses. This accepts the bounded trade-off that `mario.rossi @sns.it`
+can bypass the detector, in return for avoiding false positives in legitimate
+help-desk answers.
 
 ### Contacts that are not personal data
 
@@ -184,4 +187,3 @@ missing** from the pipeline, because it is the only one that would look at what
 the model actually produced against the evidence it was given. It is deferred for
 a concrete reason — it needs a citation format to compare against, and that
 format is not defined yet.
-

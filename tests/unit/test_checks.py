@@ -697,19 +697,19 @@ class TestPersonalDataSurvivesUnicodeAndSpacing:
 
     They used to run on the raw text while the prompt-injection patterns ran on
     a normalized copy, so the guard protecting the more sensitive value was the
-    weaker of the two: a fullwidth `＠`, or an ordinary space either side of the
-    `@`, delivered the address to the user and wrote `checks=email+…` in the log
-    as if it had been examined.
+    weaker of the two: a fullwidth `＠`, or a space after the `@`, delivered the
+    address to the user and wrote `checks=email+…` in the log as if it had been
+    examined.
     """
 
-    SPACED = "mario.rossi @ example.org"
-    TABBED = "mario.rossi\t@\texample.org"
+    POST_SPACED = "mario.rossi@ example.org"
+    POST_TABBED = "mario.rossi@\texample.org"
     FULLWIDTH = "mario.rossi＠example.org"
     ZERO_WIDTH = "mario.ros​si@example.org"
 
     @pytest.mark.parametrize(
         "address",
-        [SPACED, TABBED, FULLWIDTH, ZERO_WIDTH],
+        [POST_SPACED, POST_TABBED, FULLWIDTH, ZERO_WIDTH],
     )
     def test_a_disguised_address_is_still_personal_data_on_input(self, address):
         assert check_personal_data(
@@ -718,7 +718,7 @@ class TestPersonalDataSurvivesUnicodeAndSpacing:
 
     @pytest.mark.parametrize(
         "address",
-        [SPACED, TABBED, FULLWIDTH, ZERO_WIDTH],
+        [POST_SPACED, POST_TABBED, FULLWIDTH, ZERO_WIDTH],
     )
     def test_a_disguised_address_is_still_stopped_on_output(self, address):
         # The output stage is where this matters most: it is the last thing
@@ -731,30 +731,47 @@ class TestPersonalDataSurvivesUnicodeAndSpacing:
         "written",
         [
             HELP_DESK,
-            "helpdesk @ example.org",
+            "helpdesk@ example.org",
             "helpdesk＠example.org",
         ],
     )
     def test_an_allowed_contact_stays_exempt_however_it_is_spelled(self, written):
-        # Widening the pattern must not turn a public contact back into personal
-        # data as soon as someone spaces it out: the match is stripped of those
-        # spaces before the allowlist is consulted.
+        # Tolerating spacing after the `@` must not turn a public contact back
+        # into personal data: the match is stripped before the allowlist is
+        # consulted.
         assert check_personal_data(
             f"ho già scritto a {written}", allowed_email=HELP_DESK
         ) is None
 
     def test_a_public_contact_does_not_cover_a_personal_one_beside_it(self):
         assert check_personal_data(
-            f"ho scritto a {HELP_DESK} e anche a {self.SPACED}",
+            f"ho scritto a {HELP_DESK} e anche a {self.POST_SPACED}",
             allowed_email=HELP_DESK,
         ) == VERDICT_PERSONAL_DATA
 
     @pytest.mark.parametrize(
+        "address, input_verdict, output_verdict",
+        [
+            ("mario.rossi@sns.it", VERDICT_PERSONAL_DATA, VERDICT_OUTPUT_PERSONAL_DATA),
+            ("mario.rossi@ sns.it", VERDICT_PERSONAL_DATA, VERDICT_OUTPUT_PERSONAL_DATA),
+            ("credenziali @sns.it", None, None),
+            ("account istituzionale @sns.it", None, None),
+        ],
+    )
+    def test_email_requires_the_local_part_to_touch_the_at_sign(
+        self, address, input_verdict, output_verdict
+    ):
+        assert check_personal_data(address, allowed_email=HELP_DESK) == input_verdict
+        assert (
+            check_output_personal_data(address, allowed_email=HELP_DESK)
+            == output_verdict
+        )
+
+    @pytest.mark.parametrize(
         "message",
         [
-            # The cost of tolerating spaces around the `@` is a wider false
-            # positive surface, so the shapes a help desk actually receives are
-            # pinned here. A regression on any of these refuses a legitimate
+            # A local part separated from the `@` is ordinary help-desk prose,
+            # not an address. A regression on any of these refuses a legitimate
             # question, which is how a guard gets switched off entirely.
             "Il costo è 3 kg @ 2.50 euro al chilo.",
             "Errore: connection refused @ port 8080.",
