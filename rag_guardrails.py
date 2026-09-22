@@ -41,6 +41,7 @@ conversation history.
 
 """
 
+import threading
 import time
 from typing import NamedTuple
 
@@ -74,7 +75,7 @@ try:
         run_input_checks,
         stage_of,
     )
-    from .classifier_runtime import redact_secrets
+    from .classifier_runtime import redact_secrets, release_unused_pipelines
     from .offensive_input_classifier import classify_offensive_input
     from .prompt_injection_classifier import classify_prompt_injection
     from .settings import RagGuardrailsSettings
@@ -101,7 +102,7 @@ except ImportError:  # pragma: no cover - depends on how the module is loaded
         run_input_checks,
         stage_of,
     )
-    from classifier_runtime import redact_secrets
+    from classifier_runtime import redact_secrets, release_unused_pipelines
     from offensive_input_classifier import classify_offensive_input
     from prompt_injection_classifier import classify_prompt_injection
     from settings import RagGuardrailsSettings
@@ -114,6 +115,34 @@ except ImportError:  # pragma: no cover - depends on how the module is loaded
 # carrier between two hooks, and it is now the trace the telemetry module will
 # read instead of parsing log lines.
 VERDICT_ATTRIBUTE = "ict_guard_verdict"
+TURN_ID_ATTRIBUTE = "ict_guard_turn_id"
+_TURN_ID_LOCK = threading.Lock()
+_TURN_ID_COUNTER = 0
+
+
+def next_turn_id() -> str:
+    """Return a short process-local identifier for correlating one turn's logs."""
+    global _TURN_ID_COUNTER
+    with _TURN_ID_LOCK:
+        _TURN_ID_COUNTER = (_TURN_ID_COUNTER + 1) % (36**4)
+        return base36(_TURN_ID_COUNTER).zfill(4)
+
+
+def base36(value: int) -> str:
+    """Encode the small process-local counter without recording user identity."""
+    alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    if value == 0:
+        return "0"
+    result = ""
+    while value:
+        value, remainder = divmod(value, 36)
+        result = alphabet[remainder] + result
+    return result
+
+
+def turn_id_of(cat) -> str:
+    """Read the current turn token, preserving output-hook compatibility."""
+    return getattr(cat.working_memory, TURN_ID_ATTRIBUTE, "none")
 
 
 class ClassifierOutcome(NamedTuple):
@@ -470,6 +499,17 @@ def announce_active_guards(settings: RagGuardrailsSettings) -> None:
     """
     global _ANNOUNCED_GUARD_SUMMARY
 
+    # Run on every input turn, not only when the text announcement changes: an
+    # older concurrent turn may finish loading a model after the first turn that
+    # observed the new configuration. A later pass then releases that stale
+    # entry without making the user wait for another settings change.
+    active_models = set()
+    if settings.detect_prompt_injection_classifier:
+        active_models.add(settings.prompt_injection_classifier_model.value)
+    if settings.detect_offensive_input_classifier:
+        active_models.add(settings.offensive_input_classifier_model.value)
+    release_unused_pipelines(active_models)
+
     summary, uncovered = active_guards_summary(settings)
     if summary == _ANNOUNCED_GUARD_SUMMARY:
         return
@@ -486,7 +526,7 @@ def announce_active_guards(settings: RagGuardrailsSettings) -> None:
 
 
 def log_output_allowed(
-    enabled_detectors: tuple[str, ...], started: float
+    enabled_detectors: tuple[str, ...], started: float, turn_id: str
 ) -> None:
     """Record that the output stage ran and let the answer through.
 
@@ -505,7 +545,7 @@ def log_output_allowed(
         f"[rag-guardrails] output allowed, "
         f"stage='{STAGE_OUTPUT}', "
         f"checks={'+'.join(enabled_detectors) or 'none'}, "
-        f"latency_ms={(time.perf_counter() - started) * 1000:.2f}"
+        f"latency_ms={(time.perf_counter() - started) * 1000:.2f}, turn={turn_id}"
     )
 
 
@@ -786,6 +826,8 @@ def guard_input_message(fast_reply, cat):
     # Reset any verdict from the previous turn: working memory lives for the
     # whole session, and this is the earliest hook of the turn.
     setattr(cat.working_memory, VERDICT_ATTRIBUTE, None)
+    turn_id = next_turn_id()
+    setattr(cat.working_memory, TURN_ID_ATTRIBUTE, turn_id)
 
     settings = load_settings(cat)
     announce_active_guards(settings)
@@ -833,7 +875,7 @@ def guard_input_message(fast_reply, cat):
             f"[rag-guardrails] input allowed, "
             f"stage='{STAGE_INPUT}', "
             f"checks={'+'.join(checks_that_ran) or 'none'}, "
-            f"latency_ms={elapsed_ms:.2f}"
+            f"latency_ms={elapsed_ms:.2f}, turn={turn_id}"
         )
         return fast_reply
 
@@ -852,7 +894,7 @@ def guard_input_message(fast_reply, cat):
         f"stage='{stage_of(verdict)}', "
         f"category='{category_of(verdict)}', verdict='{verdict}'"
         f"{detail}, latency_ms={elapsed_ms:.2f}; "
-        f"no retrieval, no generation, nothing stored in memory"
+        f"no retrieval, no generation, nothing stored in memory; turn={turn_id}"
     )
     return {"output": reply}
 
@@ -879,7 +921,7 @@ def guard_output_message(message, cat):
         # different things at once — the answer was clean, the turn never reached
         # generation, or every output detector was switched off — and the reader
         # had no way to tell them apart. `checks=none` names the third.
-        log_output_allowed(enabled, started)
+        log_output_allowed(enabled, started, turn_id_of(cat))
         return message
 
     text = extract_text(message)
@@ -894,7 +936,7 @@ def guard_output_message(message, cat):
         public_contacts=parse_public_contacts(settings.public_service_contacts),
     )
     if verdict is None:
-        log_output_allowed(enabled, started)
+        log_output_allowed(enabled, started, turn_id_of(cat))
         return message
 
     reply = reply_for(verdict, settings)
@@ -909,7 +951,7 @@ def guard_output_message(message, cat):
         f"category='{category_of(verdict)}', verdict='{verdict}'"
         f"{blocked_detail(verdict, text, settings)}, "
         f"latency_ms={(time.perf_counter() - started) * 1000:.2f}; "
-        "generated reply replaced before delivery"
+        f"generated reply replaced before delivery; turn={turn_id_of(cat)}"
     )
     return replace_message_text(message, reply)
 

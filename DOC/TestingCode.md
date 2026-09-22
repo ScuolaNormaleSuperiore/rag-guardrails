@@ -143,9 +143,8 @@ and `plugin activated` proves the hooks were registered in the first place.
 insufficiency message the prompt asks for — «la risposta non è reperibile nei
 contenuti disponibili» — no plugin line is written, because no plugin was
 involved in choosing that output: the model obeyed an instruction. Its preceding
-`input allowed` line is indistinguishable from the one before a normal answer,
-which is precisely why *how often the recall comes back empty* is an open issue
-and not something the log already answers.
+`input allowed` line is indistinguishable from the one before a normal answer.
+The logs therefore do not measure how often the recall comes back empty.
 
 ### Manual check still outstanding: the tone guard
 

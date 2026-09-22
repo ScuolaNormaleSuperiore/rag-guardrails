@@ -50,9 +50,9 @@ oversight, and it has two reasons:
 
 - it loads a **second model** into memory and adds one inference to every message
   that reaches it — measured at **79 ms** on CPU on the development instance;
-- its precision on real help-desk traffic has not been measured yet. The shipped
-  threshold comes from a seven-message probe, which is a starting point and not a
-  calibration.
+- its precision on real help-desk traffic has not been measured. There is no
+  plan to enable the guard in production and no authorised, anonymised corpus
+  for calibration.
 
 Enable it from the admin panel after reading the log line it writes on the first
 message. Until then the `tone` category is uncovered, and the `guards active` line
@@ -243,8 +243,9 @@ it.
 
 ### Limits of this version
 
-- The threshold is a measured starting point over seven messages, not a
-  calibration on real traffic.
+- The threshold is a seven-message starting point, not a calibration on real
+  traffic. It must not be used to enable the guard in production without a new
+  authorised corpus-based calibration.
 - Only direct offensive content in the user message is covered, not offensive
   material arriving through retrieved documents.
 - The register of the *assistant's* answer is not checked here: that is

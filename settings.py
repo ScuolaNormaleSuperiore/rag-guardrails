@@ -11,6 +11,7 @@ being testable without Cheshire Cat.
 from enum import Enum
 
 from cat.mad_hatter.decorators import plugin
+from phonenumbers import SUPPORTED_REGIONS
 from pydantic import BaseModel, Field, field_validator
 
 # See rag_guardrails.py for why both import forms are needed.
@@ -381,8 +382,10 @@ class RagGuardrailsSettings(BaseModel):
         # An unknown region silently finds no numbers at all, which would
         # disable the phone detector without saying so. Catch the typo here.
         value = value.strip().upper()
-        if len(value) != 2 or not value.isalpha():
-            raise ValueError("must be a two-letter country code, for example IT")
+        if len(value) != 2 or not value.isalpha() or value not in SUPPORTED_REGIONS:
+            raise ValueError(
+                "must be a supported two-letter country code, for example IT"
+            )
         return value
 
     @field_validator("prompt_injection_classifier_model", mode="before")

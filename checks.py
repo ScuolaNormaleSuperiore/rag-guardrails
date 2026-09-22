@@ -186,9 +186,12 @@ _EMAIL_PATTERN = re.compile(
 )
 
 # Six letters, two year digits, a month letter, two day digits, the four
-# characters of the place code, and the check character. Sixteen in total.
+# characters of the place code, and the check character. In the seven numeric
+# positions, omocodia may replace a digit with one of LMNPQRSTUV. Sixteen in
+# total; the checksum below keeps this broader candidate finder precise.
 _CODICE_FISCALE_PATTERN = re.compile(
-    r"\b[A-Za-z]{6}\d{2}[ABCDEHLMPRSTabcdehlmprst]\d{2}[A-Za-z]\d{3}[A-Za-z]\b"
+    r"\b[A-Za-z]{6}[0-9LMNPQRSTUVlmnpqrstuv]{2}[ABCDEHLMPRSTabcdehlmprst]"
+    r"[0-9LMNPQRSTUVlmnpqrstuv]{2}[A-Za-z][0-9LMNPQRSTUVlmnpqrstuv]{3}[A-Za-z]\b"
 )
 
 # Country code, two check digits, then the national part. Spaces and

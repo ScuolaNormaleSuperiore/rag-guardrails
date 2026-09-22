@@ -68,6 +68,8 @@ PUBLIC_ADDRESS = "urp@example.org"
 VALID_CODICE_FISCALE = "RCCMNL83S18D969H"
 VALID_CODICE_FISCALE_2 = "MRTMTT25D09F205Z"
 VALID_CODICE_FISCALE_FEMALE = "CNTCHR83T41D969D"
+# A checksum-valid omocodo: the first year digit 8 is represented as U.
+VALID_CODICE_FISCALE_OMOCODO = "RCCMNLU3S18D969E"
 
 # The example copied all over the internet. Its shape is right and its check
 # character is wrong — the correct one is Q — so it is exactly what tells a
@@ -155,6 +157,7 @@ class TestCheckPersonalData:
             f"Il mio codice fiscale è {VALID_CODICE_FISCALE}, mi servono le credenziali",
             f"My tax code is {VALID_CODICE_FISCALE_2}",
             f"Codice fiscale {VALID_CODICE_FISCALE_FEMALE} per la registrazione",
+            f"Codice fiscale {VALID_CODICE_FISCALE_OMOCODO} per la registrazione",
             f"Il mio IBAN è {VALID_IBAN_IT}",
             f"Il mio IBAN è {VALID_IBAN_IT_GROUPED}",
             f"Here is my IBAN: {VALID_IBAN_DE}",
@@ -184,6 +187,8 @@ class TestCheckPersonalData:
             "How do I reset my password?",
             # Right shape, wrong check character: not a codice fiscale.
             f"Codice fiscale {FABRICATED_CODICE_FISCALE}",
+            # An omocodia-shaped candidate still needs a correct checksum.
+            "Codice fiscale RCCMNLU3S18D969F",
             # Right shape, failing mod-97: not an IBAN.
             f"IBAN {BROKEN_IBAN}",
         ],

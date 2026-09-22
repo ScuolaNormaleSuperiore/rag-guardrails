@@ -21,6 +21,7 @@ offensive input.
 
 from __future__ import annotations
 
+import gc
 import logging
 import re
 import threading
@@ -33,6 +34,50 @@ except Exception:  # pragma: no cover - available only with the core importable
 
 
 _CLASSIFIER_PIPELINES: dict[str, Any] = {}
+
+
+def release_unused_pipelines(active_model_names: set[str]) -> tuple[str, ...]:
+    """Release cached pipelines no longer selected by the active settings.
+
+    This changes process memory only: it neither uninstalls a dependency nor
+    deletes the model files kept in Hugging Face's on-disk cache. A turn already
+    using a pipeline owns its local reference, so removing the cache entry only
+    prevents new turns from reusing an obsolete configuration.
+    """
+    # Work from a snapshot: input hooks may run concurrently for different
+    # sessions, and another one may release the same stale entry first.
+    cached_pipelines = _CLASSIFIER_PIPELINES.copy()
+    stale_models = tuple(
+        model_name
+        for model_name in cached_pipelines
+        if model_name not in active_model_names
+    )
+    released_models = tuple(
+        model_name
+        for model_name in stale_models
+        if _CLASSIFIER_PIPELINES.pop(model_name, None) is not None
+    )
+    if not released_models:
+        return ()
+
+    # Transformers objects can retain reference cycles. Collection makes the
+    # release observable promptly instead of waiting for an arbitrary later
+    # allocation. CUDA is optional and is imported only after a real release.
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:  # pragma: no cover - optional runtime dependency
+        pass
+
+    for model_name in released_models:
+        runtime_log.info(
+            "[rag-guardrails] released classifier pipeline "
+            f"for inactive model {model_name}"
+        )
+    return released_models
 
 # A cold model load can involve disk I/O and a Hugging Face download. Only one
 # request may perform that work for a given model, while different models remain

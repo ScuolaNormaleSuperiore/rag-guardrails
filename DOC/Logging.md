@@ -196,7 +196,7 @@ mechanism is:
 | `prompt-injection classifier model … returns labels …, not the expected blocking label …` | `WARNING` | `DOC/ClassifierLabels.md` |
 | `prompt-injection classifier model … returned the label …, which is not in its mapping (…); the message was let through unclassified` | `WARNING` | `DOC/ClassifierLabels.md` |
 | `offensive-input classifier model … returns labels …, none of which maps to a blocking class …` | `WARNING` | `DOC/ClassifierLabels.md` |
-| `loading classifier model … into memory` / `… loaded and cached in memory` / `failed to load classifier model …` / `classifier pipeline cache hit for model …` | `INFO`, the failure at `WARNING` | `DOC/ClassifierCache.md` |
+| `loading classifier model … into memory` / `… loaded and cached in memory` / `failed to load classifier model …` / `classifier pipeline cache hit for model …` / `released classifier pipeline for inactive model …` | `INFO`, the failure at `WARNING` | `DOC/ClassifierCache.md` |
 | `no reply configured for verdict '…', falling back to normal execution` | `WARNING` | Never expected: a verdict with no entry in `REPLY_SETTING_BY_VERDICT` is a defect, and the turn continues normally rather than sending an empty message |
 
 One property holds across all of them: none carries the message text, on any path.
@@ -225,4 +225,3 @@ the shape of the violation is recorded:
 One consequence is worth keeping in mind: Cheshire Cat itself logs every
 incoming message before any plugin runs, so log retention remains a
 data-protection question independent of this plugin.
-

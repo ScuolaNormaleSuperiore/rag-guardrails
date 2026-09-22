@@ -60,12 +60,11 @@ log in full. The user is told the message was not stored in the chatbot's
 memory, which is true — it never reaches the vector database — but it is not the
 same as saying it left no trace.
 
-> **Open question 1, for the DPO.** How long are container logs retained, who can
-> read them, and do they need to be excluded from ordinary support bundles and
-> backups? A shorter retention or a restricted access path is the only available
-> mitigation. Changing the core's log level would suppress the plugin's own
-> operational lines too, which are what make a guard's silence distinguishable
-> from a guard that is not running.
+> **Decision recorded 2026-09-22, DPO.** The retention, access and handling of
+> container logs have been reviewed and are managed correctly by the service.
+> The plugin cannot alter the core logging path described above; its operational
+> logs remain enabled so a guard's silence is distinguishable from a guard that
+> is not running.
 
 ## 4. What leaves the machine
 
@@ -78,10 +77,10 @@ Both classifier guards ship **switched off**. With the shipped settings the
 plugin makes no network call at all, and no message text ever leaves the
 machine: model inference, when enabled, runs locally on the downloaded files.
 
-> **Open question 2, for the service owner.** Are the two classifier guards to be
-> enabled in production? If yes, the download happens once per model per
-> container and the machine needs outbound access to `huggingface.co`; the tone
-> guard's model is about 1.1 GB.
+> **Decision recorded 2026-09-22, service owner.** Both classifier guards stay
+> disabled by default in production and may be enabled when the service needs
+> them. Enabling one requires the corresponding operational review, including
+> outbound access to `huggingface.co`; the tone model is about 1.1 GB.
 
 ## 5. Where secrets live
 
@@ -93,9 +92,10 @@ models need none.
 | --- | --- | --- |
 | Admin panel field | `settings.json`, **in clear text**, in the plugin folder | The only supported token source. The admin panel of 1.9.2 cannot mask a field — verified against the shipped admin bundle, which renders only text and number inputs |
 
-> **Decision, 2026-09-17.** The clear-text admin field is the only supported
-> token source. Restrict access to `settings.json` and exclude it from backups,
-> container copies and support snapshots.
+> **Decision, 2026-09-17; updated 2026-09-22.** The clear-text admin field is
+> the only supported token source. `settings.json` is excluded from backups,
+> container copies and support snapshots. Access to the file is limited to
+> platform administrators.
 
 ## 6. What is already settled
 
@@ -132,8 +132,8 @@ oversight.
 
 - Names and postal addresses written in prose are **not** detected. The privacy
   guards cover structured data: e-mail addresses, phone numbers, codice fiscale,
-  IBAN. A model able to find names is tracked, and its first filter is a licence
-  question rather than a technical one.
+  IBAN. This limitation is deliberate: the service decided that structured data
+  coverage is sufficient and no NER model is planned.
 - Whether an answer is **factually grounded** in the retrieved documents is not
   checked. Neither is the language it comes back in. Both are currently prompt
   instructions, configured outside this plugin.
@@ -143,30 +143,34 @@ oversight.
 - The prompt-injection patterns are an explicit first barrier in Italian and
   English. They are not a general proof of immunity to jailbreaks.
 
-## 8. Live verification still outstanding
+## 8. Live verification
 
-None of the following can be established from the code, and none has been run on
-a live instance. They are the practical half of this gate.
+The service owner confirmed on 2026-09-22 that the live verification was
+completed. The items below record that outcome; they are not claims that can be
+re-established from this repository alone.
 
 | # | What to confirm | How |
 | --- | --- | --- |
-| 1 | The guards behave as documented against the retrieval values and the prompt actually configured in `Cat Advanced Tools` | Send the checklist messages in `DOC/TestingCode.md` and read `docker compose logs -f cheshire-cat-core` |
-| 2 | The tone guard works through the admin panel — it has **never** been switched on that way, and it ships off, so the path an administrator actually takes is the one path never taken | The five-step procedure in `DOC/TestingCode.md`, section *Manual check still outstanding: the tone guard* |
-| 3 | The hook order against `Rate Limiter`, the only other plugin on the instance sharing `fast_reply` since `Hate Defender` was removed | Only visible on a running instance; the log lines say who answered |
-| 4 | What the chatbot answers when the document search finds nothing | Tracked as its own backlog issue: it produces a number, not a tick |
-| 5 | Whether answers come back in the language of the question | Tracked as its own backlog issue, same reason |
-| 6 | The privacy guard against an address with spacing after `@` | Ask for an answer that repeats `mario.rossi@ example.org`, confirm the replacement reply and the `output blocked` line |
+| 1 | Guards against the retrieval values and prompt configured in `Cat Advanced Tools` | Completed; confirmed by the service owner |
+| 2 | Tone guard through the admin panel | Completed; confirmed by the service owner |
+| 3 | Hook order against `Rate Limiter` | Completed; confirmed by the service owner |
+| 4 | What the chatbot answers when the document search finds nothing | Closed separately by decision, without measurement |
+| 5 | Whether answers come back in the language of the question | Closed separately by decision, without measurement |
+| 6 | Privacy guard against an address with spacing after `@` | Completed; confirmed by the service owner |
 
-Items 4 and 5 are deliberately not folded into this checklist: inside a list of
-ticks they become lines someone marks as done without measuring anything.
+Items 4 and 5 were deliberately kept separate from this checklist and later
+closed by decision without a measurement.
 
 ## 9. What a `GO` would mean
 
 For clarity, since the plugin is already running in production and this gate is
 about publishing it:
 
-- the three open questions above have recorded answers;
-- the six live verifications have been run, with their outcome written down;
+- the three stakeholder decisions above are recorded;
+- the applicable live verifications have been completed and confirmed by the
+  service owner;
+- the two separate live measurements are either recorded or explicitly closed
+  by decision;
 - the backlog carries no open `Critical` or `High` defect.
 
 A sign-off here is a decision by the people who own the service. It is not a

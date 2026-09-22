@@ -236,9 +236,21 @@ If the administrator then switches to `deepset/deberta-v3-base-injection`, that
 works immediately because the caches are **per model**. A failure of one model
 does not poison another.
 
+## Releasing models no longer configured
+
+When the active classifier configuration changes, the plugin removes positive
+cache entries for models no longer selected. This releases their process memory
+and clears the CUDA allocator cache when CUDA is available. It does **not**
+delete any Hugging Face files on disk and does not uninstall dependencies.
+
+A turn that already holds a pipeline can finish safely; removing the cache entry
+only prevents later turns from reusing that inactive model. If it is selected
+again, it is loaded again, normally from the Hugging Face disk cache.
+
 ## Reset point
 
-Both caches live only for the lifetime of the plugin process.
+Both caches live only for the lifetime of the plugin process. In addition, the
+positive cache releases models that are no longer active as described above.
 
 They are reset when the plugin reloads, which in practice means when the Cat
 process or container restarts, or when the plugin is reloaded in a way that

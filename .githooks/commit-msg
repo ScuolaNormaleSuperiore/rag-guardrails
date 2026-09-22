@@ -3,7 +3,7 @@ set -euo pipefail
 
 echo "[RAG-GUARDS commit-msg] Checking commit message..." >&2
 
-if rg -qi '^Co-Authored-By:\s*(Claude|ChatGPT|Codex|OpenAI)\b' "$1"; then
+if grep -Eiq '^Co-Authored-By:[[:space:]]*(Claude|ChatGPT|Codex|OpenAI)([[:space:]]|$)' "$1"; then
 	echo "Commit blocked: remove AI Co-Authored-By trailer(s)." >&2
 	exit 1
 fi

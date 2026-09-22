@@ -142,6 +142,53 @@ class TestPipelineCache:
         assert first is second
         assert calls == [("text-classification", A_MODEL)]
 
+    def test_unused_pipelines_are_released_from_process_memory(self, monkeypatch):
+        kept = object()
+        released = object()
+        runtime._CLASSIFIER_PIPELINES.update(
+            {A_MODEL: kept, ANOTHER_MODEL: released}
+        )
+        collections = []
+        lines = []
+        fake_torch = type(
+            "Torch",
+            (), {"cuda": type("Cuda", (), {"is_available": staticmethod(lambda: False)})()},
+        )
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+        monkeypatch.setattr(runtime.gc, "collect", lambda: collections.append(True))
+        monkeypatch.setattr(runtime.runtime_log, "info", lines.append)
+
+        assert runtime.release_unused_pipelines({A_MODEL}) == (ANOTHER_MODEL,)
+        assert runtime._CLASSIFIER_PIPELINES == {A_MODEL: kept}
+        assert collections == [True]
+        assert any(ANOTHER_MODEL in line for line in lines)
+
+    def test_releasing_unused_pipelines_clears_cuda_cache_when_available(
+        self, monkeypatch
+    ):
+        runtime._CLASSIFIER_PIPELINES[A_MODEL] = object()
+        calls = []
+        fake_torch = type(
+            "Torch",
+            (),
+            {
+                "cuda": type(
+                    "Cuda",
+                    (),
+                    {
+                        "is_available": staticmethod(lambda: True),
+                        "empty_cache": staticmethod(lambda: calls.append("cleared")),
+                    },
+                )()
+            },
+        )
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+        monkeypatch.setattr(runtime.gc, "collect", lambda: None)
+
+        runtime.release_unused_pipelines(set())
+
+        assert calls == ["cleared"]
+
     def test_load_arguments_reach_transformers(self, monkeypatch):
         captured = {}
 

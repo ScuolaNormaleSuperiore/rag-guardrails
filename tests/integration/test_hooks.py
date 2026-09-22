@@ -351,12 +351,21 @@ class TestPersonalDataGuard:
 
         assert "output" not in send(cat, "Chiamatemi allo 050 509111")
 
-    def test_an_invalid_region_is_rejected_by_the_settings_model(self):
+    @pytest.mark.parametrize("field", ("input_phone_region", "output_phone_region"))
+    def test_an_unsupported_region_is_rejected_by_the_settings_model(self, field):
         # Falling back to the defaults keeps the detector working, rather than
         # leaving it silently finding nothing.
-        cat = make_cat({"input_phone_region": "Italia"})
+        cat = make_cat({field: "ZZ"})
 
-        assert guards.load_settings(cat).input_phone_region == checks.DEFAULT_PHONE_REGION
+        assert getattr(guards.load_settings(cat), field) == checks.DEFAULT_PHONE_REGION
+
+    def test_a_supported_foreign_region_is_accepted_by_the_settings_model(self):
+        cat = make_cat({"input_phone_region": "US", "output_phone_region": "FR"})
+
+        settings = guards.load_settings(cat)
+
+        assert settings.input_phone_region == "US"
+        assert settings.output_phone_region == "FR"
 
 
 class TestOutputPersonalDataGuard:
@@ -910,6 +919,23 @@ class TestGuardAnnouncement:
         send(cat, "How do I activate the VPN?")
 
         assert any("guards active:" in line for line in lines)
+
+    def test_active_classifier_models_are_kept_in_the_runtime_cache(self, monkeypatch):
+        kept = []
+        monkeypatch.setattr(guards, "release_unused_pipelines", kept.append)
+        settings = settings_module.RagGuardrailsSettings(
+            detect_prompt_injection_classifier=True,
+            detect_offensive_input_classifier=True,
+        )
+
+        guards.announce_active_guards(settings)
+
+        assert kept == [
+            {
+                settings.prompt_injection_classifier_model.value,
+                settings.offensive_input_classifier_model.value,
+            }
+        ]
 
     def test_the_announcement_covers_every_category(self, monkeypatch):
         # The old version named only the four privacy detectors, so switching
