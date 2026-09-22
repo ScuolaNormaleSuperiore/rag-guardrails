@@ -688,12 +688,14 @@ def detect_prompt_injection_with_classifier(
 
     started = time.perf_counter()
     try:
-        result = classify_prompt_injection(
-            text,
-            model_name=model_name,
-            threshold=settings.prompt_injection_classifier_threshold,
-            token=token,
-        )
+        classifier_kwargs = {
+            "model_name": model_name,
+            "threshold": settings.prompt_injection_classifier_threshold,
+            "token": token,
+        }
+        if settings.classifier_device.index >= 0:
+            classifier_kwargs["device"] = settings.classifier_device.index
+        result = classify_prompt_injection(text, **classifier_kwargs)
     except Exception as error:
         # Every reason this can fail lands here and means the same thing for the
         # turn: the message was not examined. A model that failed to load
@@ -769,12 +771,14 @@ def detect_offensive_input(
 
     started = time.perf_counter()
     try:
-        result = classify_offensive_input(
-            text,
-            model_name=model_name,
-            threshold=settings.offensive_input_classifier_threshold,
-            token=token,
-        )
+        classifier_kwargs = {
+            "model_name": model_name,
+            "threshold": settings.offensive_input_classifier_threshold,
+            "token": token,
+        }
+        if settings.classifier_device.index >= 0:
+            classifier_kwargs["device"] = settings.classifier_device.index
+        result = classify_offensive_input(text, **classifier_kwargs)
     except Exception as error:
         announce_offensive_classifier_failure(error, settings)
         return DID_NOT_RUN

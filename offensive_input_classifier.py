@@ -165,6 +165,7 @@ def classify_offensive_input(
     model_name: str = DEFAULT_OFFENSIVE_INPUT_CLASSIFIER_MODEL,
     threshold: float = DEFAULT_OFFENSIVE_INPUT_CLASSIFIER_THRESHOLD,
     token: str | bool = False,
+    device: int = -1,
 ) -> dict[str, str | float | bool | None]:
     """Classify a message and decide whether it must be blocked.
 
@@ -185,7 +186,10 @@ def classify_offensive_input(
         return {"triggered": False, "label": None, "score": 0.0}
 
     blocking = set(blocking_classes(model_name))
-    pipeline = get_pipeline(model_name, token=token)
+    pipeline_kwargs = {"token": token}
+    if device >= 0:
+        pipeline_kwargs["device"] = device
+    pipeline = get_pipeline(model_name, **pipeline_kwargs)
     _warn_on_label_mismatch(model_name, pipeline)
 
     # truncation=True with no max_length: the bound is the tokenizer's own
@@ -213,4 +217,3 @@ def classify_offensive_input(
         "label": dominant_label,
         "score": total,
     }
-

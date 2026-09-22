@@ -312,7 +312,13 @@ class TestClassifyPromptInjection:
         ).parameters
 
         assert "max_length" not in parameters
-        assert set(parameters) == {"text", "model_name", "threshold", "token"}
+        assert set(parameters) == {
+            "text",
+            "model_name",
+            "threshold",
+            "token",
+            "device",
+        }
 
 
 class TestUnmappedLabels:

@@ -157,6 +157,16 @@ class OffensiveInputClassifierModel(str, Enum):
     TEXTDETOX_TOXICITY = "textdetox/bert-multilingual-toxicity-classifier"
 
 
+class ClassifierDevice(str, Enum):
+    CPU = "CPU"
+    CUDA_0 = "First CUDA GPU"
+    CUDA_1 = "Second CUDA GPU"
+
+    @property
+    def index(self) -> int:
+        return {self.CPU: -1, self.CUDA_0: 0, self.CUDA_1: 1}[self]
+
+
 class RagGuardrailsSettings(BaseModel):
     help_desk_email: str = Field(
         default=DEFAULT_HELP_DESK_EMAIL,
@@ -333,6 +343,17 @@ class RagGuardrailsSettings(BaseModel):
         description="Reply sent when the offensive-input classifier blocks a message.",
         json_schema_extra=TEXT_AREA,
     )
+
+    classifier_device: ClassifierDevice = Field(
+        default=ClassifierDevice.CPU,
+        title="Classifier device",
+        description="CPU is the default. Select a CUDA GPU only when the host provides it.",
+    )
+
+    @field_validator("classifier_device", mode="before")
+    @classmethod
+    def _migrate_classifier_device(cls, value):
+        return {-1: ClassifierDevice.CPU, 0: ClassifierDevice.CUDA_0, 1: ClassifierDevice.CUDA_1}.get(value, value)
 
     @field_validator("help_desk_email")
     @classmethod

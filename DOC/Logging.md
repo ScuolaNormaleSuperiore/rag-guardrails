@@ -200,6 +200,7 @@ mechanism is:
 | `no reply configured for verdict '…', falling back to normal execution` | `WARNING` | Never expected: a verdict with no entry in `REPLY_SETTING_BY_VERDICT` is a defect, and the turn continues normally rather than sending an empty message |
 
 One property holds across all of them: none carries the message text, on any path.
+Flow lines also end with a four-character process-local `turn` token, so input and output from the same turn can be correlated without recording a user identifier.
 
 Deduplication does not. The two `classifier unavailable` warnings and the two
 label-mismatch warnings are written once — the state they report cannot change

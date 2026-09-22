@@ -155,6 +155,7 @@ def classify_prompt_injection(
     model_name: str = DEFAULT_PROMPT_INJECTION_CLASSIFIER_MODEL,
     threshold: float = 0.85,
     token: str | bool = False,
+    device: int = -1,
 ) -> dict[str, str | float | bool | None]:
     """Classify a message and decide whether it must be blocked.
 
@@ -166,7 +167,10 @@ def classify_prompt_injection(
 
     label_classes = PROMPT_INJECTION_CLASSIFIER_CLASSES[model_name]
 
-    pipeline = get_pipeline(model_name, token=token)
+    pipeline_kwargs = {"token": token}
+    if device >= 0:
+        pipeline_kwargs["device"] = device
+    pipeline = get_pipeline(model_name, **pipeline_kwargs)
     _warn_on_label_mismatch(model_name, pipeline)
 
     # `truncation=True` with no `max_length`, the same as the offensive-input
