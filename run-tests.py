@@ -23,11 +23,18 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run the rag-guardrails test suite."
     )
-    parser.add_argument(
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument(
         "-u",
         "--unit",
         action="store_true",
         help="run only tests/unit with the current local Python interpreter",
+    )
+    scope.add_argument(
+        "-i",
+        "--integration",
+        action="store_true",
+        help="run only tests/integration in the Cheshire Cat container",
     )
     parser.add_argument(
         "-d",
@@ -38,10 +45,10 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def pytest_args(detailed: bool, unit_only: bool) -> list[str]:
+def pytest_args(detailed: bool, test_path: str | None = None) -> list[str]:
     args = [sys.executable, "-m", "pytest"]
-    if unit_only:
-        args.append("tests/unit")
+    if test_path:
+        args.append(test_path)
     if detailed:
         args.append("-v")
     return args
@@ -67,7 +74,7 @@ def run_local_unit_tests(detailed: bool) -> int:
         print("Or use the suite in the container:  python run-tests.py", file=sys.stderr)
         return 1
 
-    result = subprocess.run(pytest_args(detailed, unit_only=True), cwd=REPO_ROOT)
+    result = subprocess.run(pytest_args(detailed, "tests/unit"), cwd=REPO_ROOT)
     return result.returncode
 
 
@@ -113,7 +120,7 @@ def running_container_id(compose_cmd: list[str], cwd: Path) -> str:
     return probe.stdout.strip()
 
 
-def run_container_suite(detailed: bool) -> int:
+def run_container_suite(detailed: bool, integration_only: bool = False) -> int:
     try:
         project_dir = compose_dir()
     except FileNotFoundError as error:
@@ -136,7 +143,10 @@ def run_container_suite(detailed: bool) -> int:
         print("Or run only the unit tests:  python run-tests.py --unit", file=sys.stderr)
         return 1
 
-    print(f"Full suite (unit + integration) in the '{SERVICE}' container")
+    if integration_only:
+        print(f"Integration tests (hook adapters) in the '{SERVICE}' container")
+    else:
+        print(f"Full suite (unit + integration) in the '{SERVICE}' container")
 
     command = [
         *compose_cmd,
@@ -149,6 +159,8 @@ def run_container_suite(detailed: bool) -> int:
         "-m",
         "pytest",
     ]
+    if integration_only:
+        command.append("tests/integration")
     if detailed:
         command.append("-v")
 
@@ -162,7 +174,7 @@ def main() -> int:
     args = parse_args()
     if args.unit:
         return run_local_unit_tests(args.detailed)
-    return run_container_suite(args.detailed)
+    return run_container_suite(args.detailed, integration_only=args.integration)
 
 
 if __name__ == "__main__":

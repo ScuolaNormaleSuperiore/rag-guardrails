@@ -142,8 +142,10 @@ Pure decision logic lives in `checks.py` and imports nothing from `cat`.
 classifier loading and caching, and `settings.py` defines the admin settings.
 
 ```bash
-python run-tests.py --unit   # unit tests only
-python run-tests.py          # full suite
+python run-tests.py --unit          # pure logic, local interpreter
+python run-tests.py --integration   # hook adapters, Cheshire Cat container
+python run-tests.py                 # both
+python run-tests.py --detailed      # both, listing every test name
 python package-plugin.py     # build the release zip
 ```
 

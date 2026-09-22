@@ -65,9 +65,10 @@ The single source of truth is `run-tests.py`. It returns pytest's own exit code.
 Direct Python entrypoint:
 
 ```bash
-python run-tests.py --unit
-python run-tests.py
-python run-tests.py --detailed
+python run-tests.py --unit          # pure logic, local interpreter
+python run-tests.py --integration   # hook adapters, Cheshire Cat container
+python run-tests.py                 # both
+python run-tests.py --detailed      # both, listing every test name
 ```
 
 Because the exit code is pytest's own, the script can be reused from a git hook or from CI. If a prerequisite is missing, no interpreter with `pytest`, container not running, `compose.yml` not where expected, it says which command fixes it instead of failing obscurely.
