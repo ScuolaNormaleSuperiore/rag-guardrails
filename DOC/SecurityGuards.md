@@ -107,8 +107,15 @@ patterns alone, and the condition is reported in the log.
 The full licence picture for every model this plugin can run, including the
 offensive-input ones and what each licence implies, is in `DOC/Licenses.md`, which
 carries the per-model table and its verification date. `README.md`, section
-*License and model terms*, holds the short version and the legal attribution
-required by Meta. Neither lives here.
+*License and model terms*, holds the short version and the conditional
+attribution for deployments that enable a Meta model. Neither lives here.
+
+### Input guard order
+
+Input checks run in this order: message length, prompt-injection patterns,
+personal data, prompt-injection classifier, then offensive-input classifier.
+The first match decides the reply; deterministic checks run before classifiers,
+and prompt injection takes precedence over offensive input.
 
 ### Enabling a gated model, the two steps
 

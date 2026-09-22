@@ -4,14 +4,11 @@
 It checks incoming messages before retrieval, generation and memory storage,
 and checks generated answers before delivery.
 
-The guards support Italian and English. They cover structured personal data,
+The guards support Italian and English and cover structured personal data,
 message length, prompt injection and optional offensive-language detection.
-The plugin is deployed in production.
 
-Prompt instructions, retrieval tuning and evidence policy remain deployment
-configuration.
-
-Read [Requirements](#requirements) and [Operational limits](#operational-limits) before installing.
+Read [Requirements](#requirements), [Before going live](#before-going-live) and
+[Operational limits](#operational-limits) before installing.
 
 ## Guards
 
@@ -61,10 +58,11 @@ only when an enabled classifier first loads its configured model.
 
 ## Installation
 
-1. Copy the plugin folder into the Cheshire Cat AI plugins directory.
+1. Download the release ZIP and extract its `rag-guardrails` folder into the
+   Cheshire Cat AI plugins directory. For a source checkout, copy that folder
+   directly instead.
 2. Start or restart Cheshire Cat AI.
-3. Open the Cheshire Cat AI admin panel.
-4. Enable `RAG Guardrails` from the plugins list.
+3. Open the admin panel and enable `RAG Guardrails` from the plugins list.
 
 ## Before going live
 
@@ -83,34 +81,15 @@ allowed contacts list.
 
 ## Operational limits
 
-- The plugin does not verify evidence sufficiency, groundedness, source
+- **Coverage:** it does not verify evidence sufficiency, groundedness, source
   consistency or the language of a generated answer.
-- Classifiers fail open: if a model cannot run, that classifier does not block
-  the message. Other enabled guards remain active.
-- The first request that uses a classifier loads its model and may be slow.
-- While one request loads a model, concurrent requests for the same model wait
-  up to five seconds, then fail open.
-- A failed model load is not retried until the plugin reloads.
-- A loaded classifier pipeline stays in memory until the plugin reloads.
-- Changing the configured model does not immediately release the previous model
-  from memory.
-- A token saved through the admin panel is stored in plain text. Exclude
-  `settings.json` from backups and support bundles.
-- Cheshire Cat AI 1.9.2 logs incoming messages before plugin hooks run. Restrict
-  access to core logs and configure their retention accordingly.
-
-## Guard order
-
-Input checks run in this order:
-
-1. `message_length`
-2. `prompt_injection` patterns
-3. `personal_data`
-4. `prompt_injection` classifier
-5. `offensive_input`
-
-The first matching guard decides the reply. Deterministic checks run before the
-classifiers, and prompt injection takes precedence over offensive input.
+- **Classifiers:** they fail open if a model cannot run. The first use may be
+  slow; concurrent requests wait up to five seconds and then fail open. Loaded
+  or failed models remain cached until the plugin reloads.
+- **Data:** the Hugging Face token is stored in plain text in `settings.json`;
+  protect that file and exclude it from support bundles. Cheshire Cat AI logs
+  incoming messages before plugin hooks run, so restrict log access and set a
+  retention policy.
 
 ## Reporting a security problem
 
@@ -120,20 +99,10 @@ process in
 
 ## Documentation
 
-- Guard behaviour:
-  [taxonomy](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/GuardTaxonomy.md),
-  [prompt injection](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/SecurityGuards.md),
-  [tone](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/ToneGuards.md),
-  [output privacy](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/OutputGuards.md).
-- Classifiers:
-  [labels](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/ClassifierLabels.md),
-  [cache](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/ClassifierCache.md),
-  [licences](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/Licenses.md).
-- Operations:
-  [logging](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/Logging.md),
-  [testing](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/TestingCode.md),
-  [release review](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/ReleaseReview.md),
-  [Rate Limiter compatibility](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/RateLimiter.md).
+- [Guard taxonomy](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/GuardTaxonomy.md)
+- [Prompt injection and classifier operations](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/SecurityGuards.md)
+- [Output privacy](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/OutputGuards.md)
+- [Testing and release review](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/TestingCode.md)
 
 ## Development
 
@@ -161,12 +130,14 @@ when an optional classifier is enabled; its models are downloaded at runtime
 under terms accepted directly by the person configuring the plugin. Never add
 model weights to the release package.
 
-### Optional Llama Prompt Guard model
+### Built with Llama (when enabled)
 
 `meta-llama/Llama-Prompt-Guard-2-86M` is an optional model for the
 prompt-injection classifier. The plugin works without enabling any classifier.
 
-When this model is selected, this notice applies:
+The release ZIP contains no Llama weights or other Llama Materials. If a
+deployment enables this model, its operator downloads and uses Llama Materials
+under Meta's terms; the following notice applies to that deployment:
 
 > **Llama is licensed under the Llama Community License, Copyright © Meta Platforms, Inc. All Rights Reserved.**
 
@@ -175,7 +146,7 @@ Face, obtain access, generate a read token there, and enter it in
 `Security guard: Hugging Face token` in the plugin settings. Public models do
 not need a token.
 
-Model licences and their verification dates are listed in
+Model licences, the full conditional attribution rationale, and their verification dates are listed in
 [DOC/Licenses.md](https://github.com/ScuolaNormaleSuperiore/rag-guardrails/blob/main/DOC/Licenses.md).
 
 Check them again before each release because publishers can change their terms.

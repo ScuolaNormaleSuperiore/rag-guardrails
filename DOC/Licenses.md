@@ -2,10 +2,9 @@
 
 The licence position of `rag-guardrails` and of every model it can run.
 
-`README.md` carries the short version: the plugin is GPL-3.0-only, it ships no
-model weights, and the attribution the Llama Community License requires. This
-document holds the reasoning and the per-model detail, which is the part that
-needs checking before a release rather than reading at install time.
+`README.md` carries the short version: the plugin is GPL-3.0-only, ships no
+model weights, and explains the conditional Llama attribution. This document
+holds the reasoning and per-model detail that need checking before a release.
 
 ## The plugin
 
@@ -32,14 +31,26 @@ genuine incompatibility where today there is none. This is a licensing boundary,
 not a size optimisation, and the same warning is repeated in
 `package-plugin.py`, above the file list.
 
-## Built with Llama
+## Built with Llama (when enabled)
 
 The prompt-injection guard can be configured to run Meta's Llama Prompt Guard 2.
-When it is, the following notice applies:
+The plugin release contains no Llama Materials: it distributes no Meta weights,
+tokenizer, inference code or Meta documentation. A plugin configured with a
+Meta model downloads it at runtime under terms accepted by that deployment's
+operator.
+
+Section 1.b.i of the Llama 4 Community License requires a prominent `Built with
+Llama` display when a party distributes or makes available Llama Materials, or a
+product or service containing them. Therefore the requirement applies when a
+deployment enables a Meta model, not to an installation that leaves the optional
+classifier disabled and not to the plugin ZIP by itself. The README displays the
+following notice conditionally for deployments that enable it:
 
 > **Llama is licensed under the Llama Community License, Copyright © Meta Platforms, Inc. All Rights Reserved.**
 
-The same notice is in `README.md`, section *License and model terms*.
+This interpretation is a documented release position, not legal advice. The
+service owner remains responsible for accepting Meta's terms and obtaining any
+legal review required for its deployment.
 
 The applicable version, read from the model card on 2026-08-06, is the
 **Llama 4 Community License Agreement** (`license_name: llama4`). Both Meta

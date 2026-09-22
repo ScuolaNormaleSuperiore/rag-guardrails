@@ -40,7 +40,7 @@ class TestPluginMetadata:
 
 
 class TestLlamaAttribution:
-    """Attribution required by the Llama Community License.
+    """Conditional attribution for deployments using the Llama model.
 
     These assert on documents rather than on behaviour, which is unusual in this
     suite and deliberate: the obligation is to *display* the attribution, so the
@@ -48,8 +48,8 @@ class TestLlamaAttribution:
     dropped from the README or from the admin-panel description — the plugin
     simply becomes non-compliant, and only a reader would ever notice.
 
-    The trigger is the model list, not the current default: as long as this plugin
-    can be configured to run a `meta-llama/*` model, the attribution is required.
+    The notice is conditional: a deployment must display it when it enables a
+    `meta-llama/*` model, while the plugin ZIP contains no Llama Materials.
     """
 
     REQUIRED_NOTICE = (
@@ -70,7 +70,10 @@ class TestLlamaAttribution:
         assert "meta-llama/" in source
 
     def test_the_readme_displays_built_with_llama(self):
-        assert "Optional Llama Prompt Guard model" in self.readme()
+        assert "Built with Llama (when enabled)" in self.readme()
+
+    def test_the_readme_makes_the_attribution_conditional_on_enabling_llama(self):
+        assert "If a\ndeployment enables this model" in self.readme()
 
     def test_the_readme_carries_the_required_copyright_notice(self):
         # Character for character, including the © and the final full stop: it is a
