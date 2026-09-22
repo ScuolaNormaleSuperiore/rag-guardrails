@@ -142,6 +142,44 @@ class TestPipelineCache:
         assert first is second
         assert calls == [("text-classification", A_MODEL)]
 
+    def test_pipeline_cache_separates_cpu_and_gpu(self, monkeypatch):
+        calls = []
+        fake_transformers(
+            monkeypatch,
+            lambda task, model, token=None, **kwargs: calls.append(kwargs) or object(),
+        )
+
+        cpu = runtime.get_pipeline(A_MODEL)
+        gpu = runtime.get_pipeline(A_MODEL, device=0)
+
+        assert cpu is not gpu
+        assert calls == [{}, {"device": 0}]
+
+    def test_warm_up_uses_local_files_only(self, monkeypatch):
+        captured = {}
+        fake_transformers(
+            monkeypatch,
+            lambda task, model, token=None, **kwargs: captured.update(kwargs) or object(),
+        )
+
+        assert runtime.warm_pipeline(A_MODEL) is True
+        assert captured["model_kwargs"] == {"local_files_only": True}
+
+    def test_failed_warm_up_does_not_prevent_normal_later_load(self, monkeypatch):
+        attempts = []
+
+        def pipeline(task, model, token=None, **kwargs):
+            attempts.append(kwargs)
+            if kwargs.get("model_kwargs"):
+                raise OSError("not cached")
+            return object()
+
+        fake_transformers(monkeypatch, pipeline)
+
+        assert runtime.warm_pipeline(A_MODEL) is False
+        assert runtime.get_pipeline(A_MODEL) is not None
+        assert len(attempts) == 2
+
     def test_unused_pipelines_are_released_from_process_memory(self, monkeypatch):
         kept = object()
         released = object()

@@ -350,6 +350,12 @@ class RagGuardrailsSettings(BaseModel):
         description="CPU is the default. Select a CUDA GPU only when the host provides it.",
     )
 
+    preload_classifiers_on_activation: bool = Field(
+        default=False,
+        title="Preload classifiers on plugin activation",
+        description="Load only models already in the local cache; never downloads during activation.",
+    )
+
     @field_validator("classifier_device", mode="before")
     @classmethod
     def _migrate_classifier_device(cls, value):

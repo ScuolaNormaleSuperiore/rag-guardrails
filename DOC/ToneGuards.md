@@ -22,7 +22,7 @@ are easy to confuse it with:
 | Stage | Category | Verdict | State |
 | --- | --- | --- | --- |
 | `input` | `tone` | `offensive_input` | implemented, shipped **switched off** |
-| `output` | `tone` | `output_tone` | not built: an open issue in `DEV/AGENTS/ISSUES_TODO.md` |
+| `output` | `tone` | `output_tone` | not planned: no output-tone guard is provided |
 
 ## Offensive Input Guard
 
@@ -137,8 +137,8 @@ Two things make the exclusion cheaper than it looks. With the sum semantics,
 including `inappropriate` would be considerably more aggressive than it would be
 with a single-label rule — a message at `inappropriate 0.50 + offensive 0.30 +
 violent 0.10` would reach 0.90 where two classes leave it at 0.40. And the
-assistant's own register is covered elsewhere: `output_tone`, in the same
-category, which is an open issue and not built. The input guard does not have to teach the user manners, it
+assistant's own register is not checked by this plugin: `output_tone` is not
+planned. The input guard does not have to teach the user manners, it
 has to stop insults and threats.
 
 ### Supported models and their labels
@@ -248,6 +248,6 @@ it.
   authorised corpus-based calibration.
 - Only direct offensive content in the user message is covered, not offensive
   material arriving through retrieved documents.
-- The register of the *assistant's* answer is not checked here: that is
-  `output_tone`, which is an open issue in the same category and not built.
+- The register of the *assistant's* answer is not checked here and no
+  `output_tone` guard is planned.
 - No per-class thresholds and no GPU selection.

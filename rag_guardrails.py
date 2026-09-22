@@ -75,7 +75,7 @@ try:
         run_input_checks,
         stage_of,
     )
-    from .classifier_runtime import redact_secrets, release_unused_pipelines
+    from .classifier_runtime import redact_secrets, release_unused_pipelines, warm_pipeline
     from .offensive_input_classifier import classify_offensive_input
     from .prompt_injection_classifier import classify_prompt_injection
     from .settings import RagGuardrailsSettings
@@ -102,7 +102,7 @@ except ImportError:  # pragma: no cover - depends on how the module is loaded
         run_input_checks,
         stage_of,
     )
-    from classifier_runtime import redact_secrets, release_unused_pipelines
+    from classifier_runtime import redact_secrets, release_unused_pipelines, warm_pipeline
     from offensive_input_classifier import classify_offensive_input
     from prompt_injection_classifier import classify_prompt_injection
     from settings import RagGuardrailsSettings
@@ -717,7 +717,7 @@ def detect_prompt_injection_with_classifier(
             f", label={result['label']}"
             f", score={result['score']:.3f}"
             f", threshold={settings.prompt_injection_classifier_threshold:.2f}"
-            f", latency_ms={elapsed_ms:.1f}"
+            f", classifier_latency_ms={elapsed_ms:.1f}"
         ),
     )
 
@@ -798,7 +798,7 @@ def detect_offensive_input(
             f", label={result['label']}"
             f", score={result['score']:.3f}"
             f", threshold={settings.offensive_input_classifier_threshold:.2f}"
-            f", latency_ms={elapsed_ms:.1f}"
+            f", classifier_latency_ms={elapsed_ms:.1f}"
         ),
     )
 
@@ -990,3 +990,24 @@ def activated(plugin):
         f"fast_reply(priority={INPUT_GUARD_PRIORITY}) for the input stage, "
         "before_cat_sends_message for the output stage"
     )
+    try:
+        settings = RagGuardrailsSettings.model_validate(plugin.load_settings())
+        if not settings.preload_classifiers_on_activation:
+            log.info("[rag-guardrails] classifier warm-up disabled")
+            return
+        token = resolve_huggingface_token(settings)
+        configured = tuple((enabled, model) for enabled, model in (
+            (settings.detect_prompt_injection_classifier, settings.prompt_injection_classifier_model.value),
+            (settings.detect_offensive_input_classifier, settings.offensive_input_classifier_model.value),
+        ) if enabled)
+        log.info(
+            "[rag-guardrails] classifier warm-up requested for "
+            f"{len(configured)} configured model(s)"
+        )
+        for _enabled, model in configured:
+            kwargs = {}
+            if settings.classifier_device.index >= 0:
+                kwargs["device"] = settings.classifier_device.index
+            warm_pipeline(model, token=token, **kwargs)
+    except Exception as error:
+        log.warning(f"[rag-guardrails] classifier warm-up skipped: {redact_secrets(str(error))}")

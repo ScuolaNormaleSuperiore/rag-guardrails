@@ -247,6 +247,14 @@ A turn that already holds a pipeline can finish safely; removing the cache entry
 only prevents later turns from reusing that inactive model. If it is selected
 again, it is loaded again, normally from the Hugging Face disk cache.
 
+## Optional warm-up at activation
+
+`Preload classifiers on plugin activation` ships disabled. When enabled, the
+plugin tries to load only files already available in the local Hugging Face
+cache. It never downloads during activation: a missing or incomplete cache is
+logged and the chatbot still starts. The first normal classifier use retains its
+usual behaviour and may download the model.
+
 ## Reset point
 
 Both caches live only for the lifetime of the plugin process. In addition, the

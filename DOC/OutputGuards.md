@@ -171,7 +171,7 @@ re-add them to a plan as missing work.
 | --- | --- | --- |
 | Answer language matches the question | `output` / `quality` / `output_language_mismatch` | An open issue in `DEV/AGENTS/ISSUES_TODO.md`, plus the manual checklist in `DOC/TestingCode.md`. Deliberately a **final verification**, not a guard |
 | Groundedness and citation consistency | `output` / `quality` / `output_groundedness` | Out of scope until the deployment exposes a stable citation format tied to the sources retrieved for the same turn |
-| Register of the answer | `output` / `tone` / `output_tone` | An open issue in `DEV/AGENTS/ISSUES_TODO.md`, together with the single-rewrite strategy that would remedy it. Its category is `tone`, the same as the input offensive check — see `DOC/ToneGuards.md` |
+| Register of the answer | `output` / `tone` / `output_tone` | Not planned: the answer's register is configured through the deployed prompt, not rewritten by this plugin. The input offensive check remains separate — see `DOC/ToneGuards.md` |
 
 Why the language check is a verification rather than a guard is worth knowing,
 because it looks like an easy win: making the *model* answer in the language of

@@ -99,13 +99,16 @@ block.
 ### Offensive input
 
 ```text
-[rag-guardrails] input blocked, stage='input', category='tone', verdict='offensive_input', detector=classifier, model=IMSyPP/hate_speech_multilingual, label=violent, score=0.999, threshold=0.60, latency_ms=79.2; no retrieval, no generation, nothing stored in memory
+[rag-guardrails] input blocked, stage='input', category='tone', verdict='offensive_input', detector=classifier, model=IMSyPP/hate_speech_multilingual, label=violent, score=0.999, threshold=0.60, classifier_latency_ms=79.2, latency_ms=80.15; no retrieval, no generation, nothing stored in memory
 ```
 
 On the offensive-input line, `score` needs one caution: it is the sum of the
 classes that count as offensive for that model, not the score of the single
 class named in `label`. Those classes are mutually exclusive, so a message can
 be split between them and still be certainly offensive.
+
+`classifier_latency_ms` measures model inference alone; `latency_ms` measures
+the complete input hook, including settings and every check that ran before it.
 
 ## Allowed path
 

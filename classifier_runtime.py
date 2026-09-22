@@ -50,7 +50,7 @@ def release_unused_pipelines(active_model_names: set[str]) -> tuple[str, ...]:
     stale_models = tuple(
         model_name
         for model_name in cached_pipelines
-        if model_name not in active_model_names
+        if model_name.split("::device=", 1)[0] not in active_model_names
     )
     released_models = tuple(
         model_name
@@ -203,7 +203,9 @@ def get_pipeline(model_name: str, token: str | bool = False, **pipeline_kwargs):
     configuration. Callers therefore must not vary these arguments for the same
     model, and today none does: each model belongs to one guard.
     """
-    pipeline = _CLASSIFIER_PIPELINES.get(model_name)
+    device = pipeline_kwargs.get("device", -1)
+    cache_key = model_name if device == -1 else f"{model_name}::device={device}"
+    pipeline = _CLASSIFIER_PIPELINES.get(cache_key)
     if pipeline is not None:
         # INFO for v1, deliberately, even though this fires on every message
         # that reaches a classifier: while the feature is being evaluated,
@@ -217,20 +219,20 @@ def get_pipeline(model_name: str, token: str | bool = False, **pipeline_kwargs):
         )
         return pipeline
 
-    previous_error = _FAILED_CLASSIFIER_MODELS.get(model_name)
+    previous_error = _FAILED_CLASSIFIER_MODELS.get(cache_key)
     if previous_error is not None:
         # Nothing is logged here: the failure was reported when it happened, and
         # repeating it once per message is the flood this cache removes.
         raise ClassifierUnavailable(previous_error)
 
-    load_lock = _classifier_load_lock(model_name)
+    load_lock = _classifier_load_lock(cache_key)
     if not load_lock.acquire(timeout=CLASSIFIER_LOAD_WAIT_SECONDS):
         # The loading request may have completed exactly as the timeout fired.
         # Re-read both caches before degrading this caller to fail-open.
-        pipeline = _CLASSIFIER_PIPELINES.get(model_name)
+        pipeline = _CLASSIFIER_PIPELINES.get(cache_key)
         if pipeline is not None:
             return pipeline
-        previous_error = _FAILED_CLASSIFIER_MODELS.get(model_name)
+        previous_error = _FAILED_CLASSIFIER_MODELS.get(cache_key)
         if previous_error is not None:
             raise ClassifierUnavailable(previous_error)
         raise ClassifierUnavailable(
@@ -240,7 +242,7 @@ def get_pipeline(model_name: str, token: str | bool = False, **pipeline_kwargs):
 
     try:
         # Another request may have populated either cache while this one waited.
-        pipeline = _CLASSIFIER_PIPELINES.get(model_name)
+        pipeline = _CLASSIFIER_PIPELINES.get(cache_key)
         if pipeline is not None:
             runtime_log.info(
                 "[rag-guardrails] classifier pipeline cache hit "
@@ -248,7 +250,7 @@ def get_pipeline(model_name: str, token: str | bool = False, **pipeline_kwargs):
             )
             return pipeline
 
-        previous_error = _FAILED_CLASSIFIER_MODELS.get(model_name)
+        previous_error = _FAILED_CLASSIFIER_MODELS.get(cache_key)
         if previous_error is not None:
             raise ClassifierUnavailable(previous_error)
 
@@ -271,7 +273,7 @@ def get_pipeline(model_name: str, token: str | bool = False, **pipeline_kwargs):
             # kept in the negative cache and handed to callers by
             # `classifier_load_error()`, which is another way for it to reach a log.
             reason = redact_secrets(str(error), token)
-            _FAILED_CLASSIFIER_MODELS[model_name] = reason
+            _FAILED_CLASSIFIER_MODELS[cache_key] = reason
             runtime_log.warning(
                 "[rag-guardrails] failed to load classifier "
                 f"model {model_name}: {reason}; it will not be retried until the "
@@ -283,10 +285,28 @@ def get_pipeline(model_name: str, token: str | bool = False, **pipeline_kwargs):
             "[rag-guardrails] classifier model "
             f"{model_name} loaded and cached in memory"
         )
-        _CLASSIFIER_PIPELINES[model_name] = pipeline
+        _CLASSIFIER_PIPELINES[cache_key] = pipeline
         return pipeline
     finally:
         load_lock.release()
+
+
+def warm_pipeline(model_name: str, token: str | bool = False, **pipeline_kwargs) -> bool:
+    """Load a cached model without allowing a network download."""
+    try:
+        local_kwargs = dict(pipeline_kwargs)
+        local_kwargs["model_kwargs"] = {"local_files_only": True}
+        get_pipeline(model_name, token=token, **local_kwargs)
+    except Exception as error:
+        device = pipeline_kwargs.get("device", -1)
+        cache_key = model_name if device == -1 else f"{model_name}::device={device}"
+        _FAILED_CLASSIFIER_MODELS.pop(cache_key, None)
+        runtime_log.warning(
+            "[rag-guardrails] classifier warm-up skipped for model "
+            f"{model_name}: {redact_secrets(str(error), token if isinstance(token, str) else None)}"
+        )
+        return False
+    return True
 
 
 def normalize_scores(result) -> list[dict]:

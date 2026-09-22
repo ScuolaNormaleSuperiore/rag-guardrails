@@ -132,10 +132,9 @@ Planned output examples:
 `privacy` carries a verdict on both stages, which is the clearest demonstration
 that the axes are orthogonal and not nested: the category says what kind of
 problem it is, the stage says where it was caught, and neither is derived from
-the other. `tone` is on its way to the same shape — `offensive_input` exists on
-`input`, `output_tone` is planned and not built — so today it demonstrates the
-other half of the point: a category is not tied to the stage it happens to have
-been introduced on.
+the other. `tone` currently exists only on `input` through `offensive_input`:
+`output_tone` is not planned. This keeps the taxonomy explicit without implying
+that every category must occur at every stage.
 
 ## Naming rules
 
@@ -185,14 +184,12 @@ Examples:
   - `stage='output'`
   - `category='privacy'`
   - `verdict='output_personal_data'`
-- a future output tone check:
+- a reserved, not-planned output-tone verdict:
   - `stage='output'`
   - `category='tone'`
   - `verdict='output_tone'`
-  - the same category as the input offensive check, because the kind of problem
-    is the same one seen from the other end of the turn
+  - it would use the same category as the input offensive check if ever adopted
 - a future retrieval normalization check:
   - `stage='retrieval'`
   - category depends on what it protects
   - verdict should name the specific retrieval control
-

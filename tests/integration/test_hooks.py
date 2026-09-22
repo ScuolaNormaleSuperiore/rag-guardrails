@@ -1973,6 +1973,8 @@ class TestOffensiveInputGuard:
         assert f"verdict='{checks.VERDICT_OFFENSIVE_INPUT}'" in blocked
         assert "label=violent" in blocked
         assert "score=0.990" in blocked
+        assert "classifier_latency_ms=" in blocked
+        assert blocked.count(", latency_ms=") == 1
 
     def test_the_refused_message_never_reaches_the_log(self, monkeypatch):
         self.stub_classifier(monkeypatch, triggered=True)
