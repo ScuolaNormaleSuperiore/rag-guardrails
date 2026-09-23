@@ -106,7 +106,7 @@ class TestClassifyPromptInjection:
         monkeypatch.setattr(
             classifier,
             "get_pipeline",
-            lambda model_name, token=None: lambda text, truncation=True: [
+            lambda model_name, token=None: lambda text, **kwargs: [
                 {"label": malicious_label, "score": 0.91}
             ],
         )
@@ -126,7 +126,7 @@ class TestClassifyPromptInjection:
         monkeypatch.setattr(
             classifier,
             "get_pipeline",
-            lambda model_name, token=None: lambda text, truncation=True: [
+            lambda model_name, token=None: lambda text, **kwargs: [
                 {"label": malicious_label, "score": 0.62}
             ],
         )
@@ -146,7 +146,7 @@ class TestClassifyPromptInjection:
         monkeypatch.setattr(
             classifier,
             "get_pipeline",
-            lambda model_name, token=None: lambda text, truncation=True: [
+            lambda model_name, token=None: lambda text, **kwargs: [
                 {"label": benign_label, "score": 0.99}
             ],
         )
@@ -170,7 +170,7 @@ class TestClassifyPromptInjection:
         monkeypatch.setattr(
             classifier,
             "get_pipeline",
-            lambda model_name, token=None: lambda text, truncation=True: [
+            lambda model_name, token=None: lambda text, **kwargs: [
                 {"label": "INJECTION", "score": 0.95}
             ],
         )
@@ -300,7 +300,7 @@ class TestClassifyPromptInjection:
         )
 
         assert captured["token"] == "hf_test"
-        assert captured["kwargs"] == {"truncation": True}
+        assert captured["kwargs"] == {"truncation": True, "max_length": 1024}
 
     def test_it_takes_no_length_argument_at_all(self):
         # The two classifiers must keep the same shape: a common runner over
@@ -330,7 +330,7 @@ class TestUnmappedLabels:
 
     @staticmethod
     def _pipeline_returning(label, score=0.99):
-        return lambda model_name, token=None: lambda text, truncation=True: [
+        return lambda model_name, token=None: lambda text, **kwargs: [
             {"label": label, "score": score}
         ]
 

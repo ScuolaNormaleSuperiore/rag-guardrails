@@ -144,7 +144,7 @@ The corresponding input-side privacy settings are independent:
 Example block line:
 
 ```text
-[rag-guardrails] output blocked, stage='output', category='privacy', verdict='output_personal_data', detected=email, latency_ms=0.21; generated reply replaced before delivery
+[rag-guardrails] output blocked, stage='output', category='privacy', verdict='output_personal_data', detected=email, latency_ms=0.21; generated reply replaced before delivery; turn=00A1
 ```
 
 As on input:
@@ -169,7 +169,7 @@ re-add them to a plan as missing work.
 
 | Check | Intended taxonomy | Where it is tracked |
 | --- | --- | --- |
-| Answer language matches the question | `output` / `quality` / `output_language_mismatch` | An open issue in `DEV/AGENTS/ISSUES_TODO.md`, plus the manual checklist in `DOC/TestingCode.md`. Deliberately a **final verification**, not a guard |
+| Answer language matches the question | `output` / `quality` / `output_language_mismatch` | No guard is planned. The deployed prompt remains responsible for language; the live verification was closed by decision without a measurement. |
 | Groundedness and citation consistency | `output` / `quality` / `output_groundedness` | Out of scope until the deployment exposes a stable citation format tied to the sources retrieved for the same turn |
 | Register of the answer | `output` / `tone` / `output_tone` | Not planned: the answer's register is configured through the deployed prompt, not rewritten by this plugin. The input offensive check remains separate — see `DOC/ToneGuards.md` |
 

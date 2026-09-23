@@ -73,7 +73,9 @@ Open `Plugins -> RAG Guardrails -> Settings`, then:
    These contacts are exempt from both input and output privacy checks.
 3. Decide whether the two classifier guards justify their download, memory and
    inference costs.
-4. For gated models, enter a read token in `Security guard: Hugging Face token`.
+4. If classifiers are enabled, optionally preload already-downloaded models at
+   the next plugin activation to avoid their first-use delay.
+5. For gated models, enter a read token in `Security guard: Hugging Face token`.
    This field is stored in plain text in `settings.json`.
 
 The Help Desk address is always exempt and does not need to be added to the
@@ -85,7 +87,8 @@ allowed contacts list.
   consistency or the language of a generated answer.
 - **Classifiers:** they fail open if a model cannot run. The first use may be
   slow; concurrent requests wait up to five seconds and then fail open. Loaded
-  or failed models remain cached until the plugin reloads.
+  pipelines are released when no longer selected; failed model loads remain
+  cached until the plugin reloads.
 - **Data:** the Hugging Face token is stored in plain text in `settings.json`;
   protect that file and exclude it from support bundles. Cheshire Cat AI logs
   incoming messages before plugin hooks run, so restrict log access and set a

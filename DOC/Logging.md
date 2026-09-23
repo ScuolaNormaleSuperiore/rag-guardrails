@@ -22,7 +22,7 @@ it, a stage that never ran and a stage that found nothing look identical.
 
 ## Activation
 
-One line when the plugin is activated, naming the hooks it registered:
+Every activation writes one line naming the hooks it registered:
 
 ```text
 [rag-guardrails] plugin activated, guardrails registered: fast_reply(priority=-1) for the input stage, before_cat_sends_message for the output stage
@@ -38,6 +38,11 @@ It comes from the `activated` plugin override rather than the
 `after_cat_bootstrap` runs once when the core starts, so it says nothing about a
 plugin switched on later from the admin panel, which is when the code on disk is
 re-read and a load failure actually happens.
+
+When classifier preload is enabled, activation also writes a warm-up request and
+one or more classifier-cache lines. A rediscovery with the same enabled models
+and device still writes the activation line, but skips the already attempted
+warm-up.
 
 ## Active guards
 
@@ -87,19 +92,19 @@ block.
 ### Input privacy
 
 ```text
-[rag-guardrails] input blocked, stage='input', category='privacy', verdict='personal_data', detected=email+phone (mobile), latency_ms=0.14; no retrieval, no generation, nothing stored in memory
+[rag-guardrails] input blocked, stage='input', category='privacy', verdict='personal_data', detected=email+phone (mobile), latency_ms=0.14; no retrieval, no generation, nothing stored in memory; turn=00A1
 ```
 
 ### Output privacy
 
 ```text
-[rag-guardrails] output blocked, stage='output', category='privacy', verdict='output_personal_data', detected=email, latency_ms=0.21; generated reply replaced before delivery
+[rag-guardrails] output blocked, stage='output', category='privacy', verdict='output_personal_data', detected=email, latency_ms=0.21; generated reply replaced before delivery; turn=00A1
 ```
 
 ### Offensive input
 
 ```text
-[rag-guardrails] input blocked, stage='input', category='tone', verdict='offensive_input', detector=classifier, model=IMSyPP/hate_speech_multilingual, label=violent, score=0.999, threshold=0.60, classifier_latency_ms=79.2, latency_ms=80.15; no retrieval, no generation, nothing stored in memory
+[rag-guardrails] input blocked, stage='input', category='tone', verdict='offensive_input', detector=classifier, model=IMSyPP/hate_speech_multilingual, label=violent, score=0.999, threshold=0.60, classifier_latency_ms=79.2, latency_ms=80.15; no retrieval, no generation, nothing stored in memory; turn=00A1
 ```
 
 On the offensive-input line, `score` needs one caution: it is the sum of the
@@ -117,13 +122,13 @@ line at `INFO`. This lets an instance keep the core at its normal log level whil
 still showing that the plugin handled the turn and which checks covered it:
 
 ```text
-[rag-guardrails] input allowed, stage='input', checks=length+injection_patterns+personal_data+injection_classifier, latency_ms=0.03
+[rag-guardrails] input allowed, stage='input', checks=length+injection_patterns+personal_data+injection_classifier, latency_ms=0.03, turn=00A1
 ```
 
 The output stage writes the matching line when it delivers an answer unchanged:
 
 ```text
-[rag-guardrails] output allowed, stage='output', checks=email+codice_fiscale+iban+phone, latency_ms=0.08
+[rag-guardrails] output allowed, stage='output', checks=email+codice_fiscale+iban+phone, latency_ms=0.08, turn=00A1
 ```
 
 `checks` names the detectors that actually examined the text, so a stage with
@@ -142,7 +147,7 @@ up on — so they appear in `checks` only when they report having examined it. A
 turn during a cold start therefore reads:
 
 ```text
-[rag-guardrails] input allowed, stage='input', checks=length+injection_patterns+personal_data, latency_ms=5000.58
+[rag-guardrails] input allowed, stage='input', checks=length+injection_patterns+personal_data, latency_ms=5000.58, turn=00A1
 ```
 
 with no `injection_classifier`, next to a single `classifier unavailable`
@@ -188,8 +193,9 @@ token.
 
 ## The remaining lines, and where they are described
 
-The lines above are the ones a normal turn produces. Six others exist, all of them
-reporting a degradation rather than a turn, and each is documented where its
+The lines above are the ones a normal turn produces. Seven further line families
+exist; most report a degradation rather than a turn, while the classifier-cache
+family also reports normal loading and reuse. Each is documented where its
 mechanism is:
 
 | Line | Level | Described in |
@@ -199,7 +205,7 @@ mechanism is:
 | `prompt-injection classifier model … returns labels …, not the expected blocking label …` | `WARNING` | `DOC/ClassifierLabels.md` |
 | `prompt-injection classifier model … returned the label …, which is not in its mapping (…); the message was let through unclassified` | `WARNING` | `DOC/ClassifierLabels.md` |
 | `offensive-input classifier model … returns labels …, none of which maps to a blocking class …` | `WARNING` | `DOC/ClassifierLabels.md` |
-| `loading classifier model … into memory` / `… loaded and cached in memory` / `failed to load classifier model …` / `classifier pipeline cache hit for model …` / `released classifier pipeline for inactive model …` | `INFO`, the failure at `WARNING` | `DOC/ClassifierCache.md` |
+| `loading classifier model … into memory` / `… loaded and cached in memory` / `warming classifier model … from locally cached files only` / `classifier warm-up loaded model … into memory` / `classifier warm-up skipped … unavailable from the local cache` / `classifier pipeline cache hit for model …` / `released classifier pipeline for inactive model …, device=…` | `INFO`, skipped warm-up at `WARNING` | `DOC/ClassifierCache.md` |
 | `no reply configured for verdict '…', falling back to normal execution` | `WARNING` | Never expected: a verdict with no entry in `REPLY_SETTING_BY_VERDICT` is a defect, and the turn continues normally rather than sending an empty message |
 
 One property holds across all of them: none carries the message text, on any path.
@@ -211,11 +217,12 @@ until the plugin reloads, so repeating them per message would bury the log exact
 when it is needed. The unmapped-label warning is deduplicated too, but per
 `(model, label)` pair rather than per model: unlike the others it reports
 something the model said, and a second unknown label is a second piece of
-information that the first must not hide. The model-loading lines are not deduplicated and do not need to
-be, because loading happens once per model anyway — except `classifier pipeline
-cache hit`, which is written on **every** message that reaches a classifier and is
-at `INFO` deliberately while the feature is being evaluated. `no reply configured`
-is not deduplicated either, because it cannot occur outside a defect.
+information that the first must not hide. The model-loading lines are not
+deduplicated and do not need to be, because loading happens once per
+model-and-device pair anyway — except `classifier pipeline cache hit`, which is
+written on **every** message that reaches a classifier and is at `INFO`
+deliberately while the feature is being evaluated. `no reply configured` is not
+deduplicated either, because it cannot occur outside a defect.
 
 ## Logging boundaries
 

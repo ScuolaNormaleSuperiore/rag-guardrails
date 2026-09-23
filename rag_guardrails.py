@@ -75,7 +75,12 @@ try:
         run_input_checks,
         stage_of,
     )
-    from .classifier_runtime import redact_secrets, release_unused_pipelines, warm_pipeline
+    from .classifier_runtime import (
+        classifier_cache_key,
+        redact_secrets,
+        release_unused_pipelines,
+        warm_pipeline,
+    )
     from .offensive_input_classifier import classify_offensive_input
     from .prompt_injection_classifier import classify_prompt_injection
     from .settings import RagGuardrailsSettings
@@ -102,7 +107,12 @@ except ImportError:  # pragma: no cover - depends on how the module is loaded
         run_input_checks,
         stage_of,
     )
-    from classifier_runtime import redact_secrets, release_unused_pipelines, warm_pipeline
+    from classifier_runtime import (
+        classifier_cache_key,
+        redact_secrets,
+        release_unused_pipelines,
+        warm_pipeline,
+    )
     from offensive_input_classifier import classify_offensive_input
     from prompt_injection_classifier import classify_prompt_injection
     from settings import RagGuardrailsSettings
@@ -118,6 +128,12 @@ VERDICT_ATTRIBUTE = "ict_guard_verdict"
 TURN_ID_ATTRIBUTE = "ict_guard_turn_id"
 _TURN_ID_LOCK = threading.Lock()
 _TURN_ID_COUNTER = 0
+
+# `find_plugins()` can re-activate every enabled plugin after unrelated admin
+# changes.  Warm each effective classifier configuration at most once per
+# process so those rediscoveries do not repeat local model loading.
+_WARMED_CLASSIFIER_CONFIGURATIONS: set[tuple[int, tuple[str, ...]]] = set()
+_WARMED_CLASSIFIER_CONFIGURATIONS_LOCK = threading.Lock()
 
 
 def next_turn_id() -> str:
@@ -267,6 +283,35 @@ def announce_settings_fallback(reason: str) -> None:
     )
 
 
+def _read_settings(read_stored_settings) -> tuple[RagGuardrailsSettings, bool]:
+    """Validate stored settings, falling back to model defaults without raising."""
+    global _ANNOUNCED_SETTINGS_FALLBACK
+
+    try:
+        stored = read_stored_settings()
+    except Exception as error:
+        announce_settings_fallback(f"settings unavailable ({error})")
+        return RagGuardrailsSettings(), False
+
+    if not stored:
+        announce_settings_fallback("settings are empty")
+        return RagGuardrailsSettings(), False
+
+    try:
+        settings = RagGuardrailsSettings.model_validate(stored)
+    except ValidationError as error:
+        announce_settings_fallback(f"invalid settings ({error})")
+        return RagGuardrailsSettings(), False
+
+    _ANNOUNCED_SETTINGS_FALLBACK = None
+    return settings, True
+
+
+def _read_settings_for_cat(cat) -> tuple[RagGuardrailsSettings, bool]:
+    """Read a Cat's settings and say whether they were successfully loaded."""
+    return _read_settings(lambda: cat.mad_hatter.get_plugin().load_settings())
+
+
 def load_settings(cat) -> RagGuardrailsSettings:
     """Return the plugin configuration, falling back to the model defaults.
 
@@ -281,26 +326,7 @@ def load_settings(cat) -> RagGuardrailsSettings:
     used to reach `model_validate({})` and apply the whole set of defaults in
     complete silence.
     """
-    global _ANNOUNCED_SETTINGS_FALLBACK
-
-    try:
-        stored = cat.mad_hatter.get_plugin().load_settings()
-    except Exception as error:
-        announce_settings_fallback(f"settings unavailable ({error})")
-        return RagGuardrailsSettings()
-
-    if not stored:
-        announce_settings_fallback("settings are empty")
-        return RagGuardrailsSettings()
-
-    try:
-        settings = RagGuardrailsSettings.model_validate(stored)
-    except ValidationError as error:
-        announce_settings_fallback(f"invalid settings ({error})")
-        return RagGuardrailsSettings()
-
-    _ANNOUNCED_SETTINGS_FALLBACK = None
-    return settings
+    return _read_settings_for_cat(cat)[0]
 
 
 def _render(template: str, settings: RagGuardrailsSettings) -> str:
@@ -485,7 +511,19 @@ def active_guards_summary(
     return f"{limits}, {privacy}, {security}, {tone}", uncovered
 
 
-def announce_active_guards(settings: RagGuardrailsSettings) -> None:
+def active_classifier_models(settings: RagGuardrailsSettings) -> tuple[str, ...]:
+    """Return the enabled classifier models once, in stable guard order."""
+    models = []
+    if settings.detect_prompt_injection_classifier:
+        models.append(settings.prompt_injection_classifier_model.value)
+    if settings.detect_offensive_input_classifier:
+        models.append(settings.offensive_input_classifier_model.value)
+    return tuple(dict.fromkeys(models))
+
+
+def announce_active_guards(
+    settings: RagGuardrailsSettings, release_cached_pipelines: bool = True
+) -> None:
     """Log the guard configuration once, and again whenever it changes.
 
     Not at every turn: on a message that passes, the plugin writes nothing at
@@ -503,12 +541,13 @@ def announce_active_guards(settings: RagGuardrailsSettings) -> None:
     # older concurrent turn may finish loading a model after the first turn that
     # observed the new configuration. A later pass then releases that stale
     # entry without making the user wait for another settings change.
-    active_models = set()
-    if settings.detect_prompt_injection_classifier:
-        active_models.add(settings.prompt_injection_classifier_model.value)
-    if settings.detect_offensive_input_classifier:
-        active_models.add(settings.offensive_input_classifier_model.value)
-    release_unused_pipelines(active_models)
+    if release_cached_pipelines:
+        device = settings.classifier_device.index
+        active_cache_keys = {
+            classifier_cache_key(model, device)
+            for model in active_classifier_models(settings)
+        }
+        release_unused_pipelines(active_cache_keys)
 
     summary, uncovered = active_guards_summary(settings)
     if summary == _ANNOUNCED_GUARD_SUMMARY:
@@ -833,8 +872,8 @@ def guard_input_message(fast_reply, cat):
     turn_id = next_turn_id()
     setattr(cat.working_memory, TURN_ID_ATTRIBUTE, turn_id)
 
-    settings = load_settings(cat)
-    announce_active_guards(settings)
+    settings, settings_loaded = _read_settings_for_cat(cat)
+    announce_active_guards(settings, release_cached_pipelines=settings_loaded)
 
     text = extract_text(getattr(cat.working_memory, "user_message_json", None))
     verdict = run_input_checks(text, settings)
@@ -976,38 +1015,45 @@ def activated(plugin):
     (`cat/looking_glass/cheshire_cat.py:106`), so it says nothing about a plugin
     switched on later from the admin panel — which is the case where a load
     failure actually happens, because that is when the code on disk is re-read.
-    This override runs on every activation, toggles included
-    (`cat/mad_hatter/plugin.py:90`).
+    This override runs on every activation, including plugin rediscovery after
+    some unrelated admin actions (`cat/mad_hatter/plugin.py:90`).  Classifier
+    warm-up is idempotent for each effective model-and-device configuration in
+    one process, so rediscovery does not repeat that potentially costly work.
 
     The guard configuration is deliberately *not* announced here. It belongs to
     `guards active`, which is driven by the settings and re-announced whenever
     they change; duplicating it at activation would report a configuration that
-    can be edited a moment later, and would need `settings.json` to exist
-    already.
+    can be edited a moment later. Settings are read here only for the optional
+    classifier warm-up, whose own log lines say what was requested.
     """
     log.info(
         "[rag-guardrails] plugin activated, guardrails registered: "
         f"fast_reply(priority={INPUT_GUARD_PRIORITY}) for the input stage, "
         "before_cat_sends_message for the output stage"
     )
+    token: str | bool = False
     try:
-        settings = RagGuardrailsSettings.model_validate(plugin.load_settings())
+        settings, _ = _read_settings(plugin.load_settings)
         if not settings.preload_classifiers_on_activation:
-            log.info("[rag-guardrails] classifier warm-up disabled")
             return
         token = resolve_huggingface_token(settings)
-        configured = tuple((enabled, model) for enabled, model in (
-            (settings.detect_prompt_injection_classifier, settings.prompt_injection_classifier_model.value),
-            (settings.detect_offensive_input_classifier, settings.offensive_input_classifier_model.value),
-        ) if enabled)
+        configured = active_classifier_models(settings)
+        signature = (settings.classifier_device.index, tuple(sorted(set(configured))))
+        with _WARMED_CLASSIFIER_CONFIGURATIONS_LOCK:
+            if signature in _WARMED_CLASSIFIER_CONFIGURATIONS:
+                return
+            _WARMED_CLASSIFIER_CONFIGURATIONS.add(signature)
         log.info(
             "[rag-guardrails] classifier warm-up requested for "
             f"{len(configured)} configured model(s)"
         )
-        for _enabled, model in configured:
-            kwargs = {}
-            if settings.classifier_device.index >= 0:
-                kwargs["device"] = settings.classifier_device.index
+        kwargs = {}
+        if settings.classifier_device.index >= 0:
+            kwargs["device"] = settings.classifier_device.index
+        for model in configured:
             warm_pipeline(model, token=token, **kwargs)
     except Exception as error:
-        log.warning(f"[rag-guardrails] classifier warm-up skipped: {redact_secrets(str(error))}")
+        log.warning(
+            "[rag-guardrails] classifier warm-up skipped: "
+            f"{redact_secrets(str(error), token if isinstance(token, str) else None)}"
+        )

@@ -38,6 +38,8 @@ The guard uses two independent detectors.
 - implemented through `transformers.pipeline("text-classification", ...)`
 - runs only if the custom detector does not block first
 - uses the configured model and threshold
+- truncates classifier input to 1,024 tokens independently of the message-length
+  guard, preventing unbounded inference when that character limit is disabled
 
 The combined logic is `OR`: one positive detector is enough to block.
 
@@ -180,9 +182,9 @@ others.
 
 Nothing is wrong in that case: the load may well succeed a moment later, and the
 next message finds the pipeline cached. What it costs is the wait itself, paid
-inside `fast_reply` by every turn arriving during a cold start. Removing it means
-loading the configured models outside the turn, which is tracked as open work in
-`DEV/AGENTS/ISSUES_TODO.md`.
+inside `fast_reply` by every turn arriving during a cold start. An administrator
+can enable the optional offline preload for the next plugin activation to avoid
+that first-turn load when model files are already local.
 
 The full mechanism is in `DOC/ClassifierCache.md`, section *Only one request loads
 a model*.
@@ -208,7 +210,7 @@ Two consequences worth knowing:
 
 - **Adding a token or approving model access requires a restart** of the Cheshire
   Cat container to take effect. Selecting a *different* model from the admin panel
-  does not: the cache is per model, so switching to the public
+  does not: the cache is per model and selected device, so switching to the public
   `deepset/deberta-v3-base-injection` works immediately.
 - **The failure is reported once, not once per message.** The state cannot change
   until the plugin reloads, so repeating it every turn would bury the log exactly
@@ -306,5 +308,6 @@ This first version is intentionally narrow.
   corpus must be measured rather than assumed.
 - The guard covers direct prompt injection on the user message, not indirect
   prompt injection through retrieved documents.
-- Different thresholds per model, GPU selection, and structured telemetry are
-  outside the scope of v1.
+- Different thresholds per model and structured telemetry are outside the scope
+  of v1. CPU is the default, with explicit CUDA-device selection available in
+  the plugin settings.

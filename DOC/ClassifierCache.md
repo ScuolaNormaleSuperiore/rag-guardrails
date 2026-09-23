@@ -20,8 +20,8 @@ There are two different caches involved, and they should not be confused:
 This document is mainly about the first one.
 
 The plugin does **not** cache the verdict for a message text it has already
-seen. It caches the **loaded `transformers` pipeline object** for a model, so
-the same model does not have to be loaded again on every message.
+seen. It caches the **loaded `transformers` pipeline object** for a model-and-device
+pair, so the same placement does not have to be loaded again on every message.
 
 ## The two caches in the plugin
 
@@ -35,9 +35,11 @@ _CLASSIFIER_PIPELINES: dict[str, Any] = {}
 
 This is the cache of models that loaded successfully.
 
-The key is the model name, for example:
+The key is the model name on CPU, or the model name plus device on CUDA, for
+example:
 
 - `meta-llama/Llama-Prompt-Guard-2-86M`
+- `meta-llama/Llama-Prompt-Guard-2-86M::device=0`
 - `IMSyPP/hate_speech_multilingual`
 
 The value is the ready-to-use `transformers.pipeline(...)` object already held
@@ -51,8 +53,8 @@ _FAILED_CLASSIFIER_MODELS: dict[str, str] = {}
 
 This is the cache of models whose load already failed.
 
-The key is again the model name. The value is the reason for the failure, kept
-as a string after secret redaction.
+The key uses the same model-and-device form. The value is the reason for the
+failure, kept as a string after secret redaction.
 
 This cache exists for **cost**, not for tidiness: if a model already failed
 because it is gated, unavailable, or otherwise broken, retrying it on every
@@ -69,7 +71,7 @@ Its behavior is:
    immediately.
 2. If the model is present in `_FAILED_CLASSIFIER_MODELS`, do not retry the
    load and raise `ClassifierUnavailable`.
-3. Otherwise, acquire that model's load lock, waiting at most
+3. Otherwise, acquire that model-and-device pair's load lock, waiting at most
    `CLASSIFIER_LOAD_WAIT_SECONDS`. See *Only one request loads a model* below.
 4. Re-read both caches, because another request may have filled either one while
    this one waited.
@@ -85,8 +87,8 @@ that cannot run must not block the message and must not take the turn down.
 
 A cold load can involve disk I/O and a download from Hugging Face, and without a
 lock every concurrent turn would start its own. `_CLASSIFIER_LOAD_LOCKS` holds one
-lock per model — different models stay independent — and the wait is bounded at
-`CLASSIFIER_LOAD_WAIT_SECONDS`, currently `5.0`.
+lock per model-and-device pair — different models and placements stay independent
+— and the wait is bounded at `CLASSIFIER_LOAD_WAIT_SECONDS`, currently `5.0`.
 
 That bound is the third way `ClassifierUnavailable` is raised, alongside the
 negative cache and a load that failed outright. A request that times out has
@@ -96,8 +98,8 @@ the message.
 
 The timeout exists so a stuck third-party load cannot hold every later request
 indefinitely. Its cost is that during a slow cold start each concurrent turn waits
-the full five seconds before giving up, which is why loading the configured models
-outside the turn is tracked as open work in `DEV/AGENTS/ISSUES_TODO.md`.
+the full five seconds before giving up. Deployments that need to avoid that first
+turn can enable the optional offline warm-up described below.
 
 ## What happens on repeated messages
 
@@ -148,9 +150,11 @@ The caches are:
 
 - **module-level**
 - **shared by both classifier guards**
-- **keyed only by model name**
+- **keyed by model name and selected device**
 
-That means a model is loaded once per process, whoever asks for it.
+That means a model is loaded once per process for each selected device, whoever
+asks for it. CPU keeps the bare model-name key; CUDA uses
+`model_name::device=N`.
 
 This is intentional. The cache is not "owned" by one guard: it belongs to the
 runtime layer shared by the prompt-injection and offensive-input classifiers.
@@ -161,19 +165,18 @@ The current implementation does **not**:
 
 - cache the classification result for a message text
 - remember "this sentence was offensive" or "this sentence was injection"
-- release unused models automatically when the admin changes model selection
-- distinguish the cache by device or other advanced runtime configuration
+- distinguish cache entries by pipeline-construction options other than device
 
 Those limits matter because they explain two existing design consequences:
 
-- trying several different models from the admin panel can leave several models
-  resident in memory until the plugin reloads
-- a model is reused by name alone, so any future runtime option that changes
-  the actual pipeline identity must also enter the cache key
+- changing model selection or device releases the no-longer-active cached
+  placement on the next input turn
+- a future runtime option that changes the actual pipeline identity must enter
+  the cache key too
 
 ## Relationship with the Hugging Face disk cache
 
-The log line
+On the normal request path, the log line
 
 ```text
 Transformers will use the local Hugging Face cache when available and download missing files if needed
@@ -181,6 +184,10 @@ Transformers will use the local Hugging Face cache when available and download m
 
 refers to a different cache layer: files already stored on disk by the
 Hugging Face libraries.
+
+Activation warm-up is different: it logs that it is loading from locally cached
+files only and never downloads missing files. A missing local model is reported
+as a skipped warm-up and is not recorded as a permanent classifier failure.
 
 That is not the same thing as the plugin cache:
 
@@ -233,15 +240,16 @@ Message 2:
 - the guard continues fail-open again, but without a second network attempt
 
 If the administrator then switches to `deepset/deberta-v3-base-injection`, that
-works immediately because the caches are **per model**. A failure of one model
-does not poison another.
+works immediately because the caches are **per model and device**. A failure of
+one model or placement does not poison another.
 
 ## Releasing models no longer configured
 
 When the active classifier configuration changes, the plugin removes positive
-cache entries for models no longer selected. This releases their process memory
-and clears the CUDA allocator cache when CUDA is available. It does **not**
-delete any Hugging Face files on disk and does not uninstall dependencies.
+cache entries for model-and-device pairs no longer selected. This releases their
+process memory and clears the CUDA allocator cache when CUDA is available. It
+does **not** delete any Hugging Face files on disk and does not uninstall
+dependencies.
 
 A turn that already holds a pipeline can finish safely; removing the cache entry
 only prevents later turns from reusing that inactive model. If it is selected
@@ -251,9 +259,12 @@ again, it is loaded again, normally from the Hugging Face disk cache.
 
 `Preload classifiers on plugin activation` ships disabled. When enabled, the
 plugin tries to load only files already available in the local Hugging Face
-cache. It never downloads during activation: a missing or incomplete cache is
+cache. The setting takes effect on the next plugin activation, not when it is
+saved. It never downloads during activation: a missing or incomplete cache is
 logged and the chatbot still starts. The first normal classifier use retains its
-usual behaviour and may download the model.
+usual behaviour and may download the model. A process warms each enabled-model
+and device configuration at most once, so core-driven plugin rediscovery does
+not repeat the local load.
 
 ## Reset point
 

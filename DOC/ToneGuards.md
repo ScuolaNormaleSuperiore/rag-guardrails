@@ -223,15 +223,15 @@ says exactly that:
 
 A failed load is remembered and never retried until the plugin reloads, which is
 what keeps a broken configuration from costing a network round trip inside
-`fast_reply` on every message. Selecting a *different* model from the admin panel
-works immediately, because the cache is per model.
+`fast_reply` on every message. Selecting a *different* model or device from the
+admin panel works immediately, because the cache is per model and device.
 
 ### What the log records
 
 One `INFO` line per refusal, never the refused text:
 
 ```
-[rag-guardrails] input blocked, stage='input', category='tone', verdict='offensive_input', detector=classifier, model=IMSyPP/hate_speech_multilingual, label=violent, score=0.999, threshold=0.60, latency_ms=79.2; no retrieval, no generation, nothing stored in memory
+[rag-guardrails] input blocked, stage='input', category='tone', verdict='offensive_input', detector=classifier, model=IMSyPP/hate_speech_multilingual, label=violent, score=0.999, threshold=0.60, classifier_latency_ms=79.2, latency_ms=80.15; no retrieval, no generation, nothing stored in memory; turn=00A1
 ```
 
 `label` is the strongest blocking class and `score` is the **sum** of all of them.
@@ -250,4 +250,5 @@ it.
   material arriving through retrieved documents.
 - The register of the *assistant's* answer is not checked here and no
   `output_tone` guard is planned.
-- No per-class thresholds and no GPU selection.
+- No per-class thresholds. CPU is the default, with explicit CUDA-device
+  selection available in the plugin settings.

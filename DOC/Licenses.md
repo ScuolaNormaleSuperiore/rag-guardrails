@@ -52,7 +52,7 @@ This interpretation is a documented release position, not legal advice. The
 service owner remains responsible for accepting Meta's terms and obtaining any
 legal review required for its deployment.
 
-The applicable version, read from the model card on 2026-08-06, is the
+The applicable version, re-checked against the model card on 2026-09-23, is the
 **Llama 4 Community License Agreement** (`license_name: llama4`). Both Meta
 models are **gated**: access is granted manually by Meta after the request is
 accepted, so using them requires accepting Meta's terms on the model page and
@@ -62,7 +62,7 @@ for the operational steps.
 
 ## Licence of each supported model
 
-Verified against the Hugging Face model cards on 2026-08-06. **Check them again
+Verified against the Hugging Face model cards on 2026-09-23. **Check them again
 before a release**: a publisher can change a licence, and this table is a
 snapshot rather than a promise.
 

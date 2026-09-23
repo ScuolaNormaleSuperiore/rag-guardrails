@@ -15,6 +15,7 @@ from __future__ import annotations
 try:
     from .classifier_runtime import (
         ClassifierUnavailable,
+        CLASSIFIER_MAX_INPUT_TOKENS,
         classifier_load_error,
         get_pipeline,
         model_labels,
@@ -24,6 +25,7 @@ try:
 except ImportError:  # pragma: no cover - depends on how the module is loaded
     from classifier_runtime import (
         ClassifierUnavailable,
+        CLASSIFIER_MAX_INPUT_TOKENS,
         classifier_load_error,
         get_pipeline,
         model_labels,
@@ -205,7 +207,9 @@ def classify_prompt_injection(
     # `AttributeError`, an empty response raised `IndexError`. Both failed open,
     # correctly, but the guard then reported itself as *unavailable* — a load or
     # token problem — when what had actually changed was the library version.
-    scores = normalize_scores(pipeline(text, truncation=True))
+    scores = normalize_scores(
+        pipeline(text, truncation=True, max_length=CLASSIFIER_MAX_INPUT_TOKENS)
+    )
     if not scores:
         return {"triggered": False, "label": None, "score": 0.0}
 

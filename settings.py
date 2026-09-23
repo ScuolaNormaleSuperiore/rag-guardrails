@@ -353,7 +353,7 @@ class RagGuardrailsSettings(BaseModel):
     preload_classifiers_on_activation: bool = Field(
         default=False,
         title="Preload classifiers on plugin activation",
-        description="Load only models already in the local cache; never downloads during activation.",
+        description="Loads only locally cached models; never downloads. Takes effect on the next plugin activation.",
     )
 
     @field_validator("classifier_device", mode="before")

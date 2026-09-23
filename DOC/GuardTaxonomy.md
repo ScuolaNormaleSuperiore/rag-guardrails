@@ -55,7 +55,8 @@ Categories, with the constant that carries each one in `checks.py`:
 - `security` — `CATEGORY_SECURITY`
 - `tone` — `CATEGORY_TONE`
 - `quality` — **reserved, not in the code yet**: no constant and no verdict uses
-  it, because every check that would carry it is planned rather than built
+  it; the reserved examples below do not imply that a corresponding check is
+  planned
 
 Meaning of each category:
 
@@ -96,7 +97,7 @@ be used as categories.
 
 A verdict is the most specific label in the taxonomy.
 
-Examples of current and planned verdicts:
+Examples of current and reserved verdicts:
 
 - `message_length`
 - `personal_data`
@@ -121,7 +122,7 @@ telemetry.
 | `input` | `tone` | `offensive_input` |
 | `output` | `privacy` | `output_personal_data` |
 
-Planned output examples:
+Reserved output examples:
 
 | Stage | Category | Verdict |
 | --- | --- | --- |
@@ -189,7 +190,7 @@ Examples:
   - `category='tone'`
   - `verdict='output_tone'`
   - it would use the same category as the input offensive check if ever adopted
-- a future retrieval normalization check:
+- a hypothetical retrieval normalization check:
   - `stage='retrieval'`
   - category depends on what it protects
   - verdict should name the specific retrieval control

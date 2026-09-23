@@ -2,13 +2,15 @@
 
 Two guards run a local model — the prompt-injection classifier and the
 offensive-input classifier — and they need exactly the same machinery around it:
-a lazy import of `transformers`, one pipeline per model kept in memory, a memory
+a lazy import of `transformers`, one pipeline per model-and-device pair kept in
+memory, a memory
 of the loads that already failed, and a fail-open contract. That machinery lives
 here so it exists once.
 
-The caches are keyed by model name and shared by every caller, which is the
-correct behaviour rather than a side effect: a model is loaded once per process,
-whoever asks for it. It also keeps `classifier_load_error()` a single function,
+The caches are keyed by model name and selected device and shared by every caller,
+which is the correct behaviour rather than a side effect: a model is loaded once
+per process for each device, whoever asks for it. It also keeps
+`classifier_load_error()` a single function,
 so a caller that needs to know whether a model is usable asks one question
 regardless of which guard it belongs to.
 
@@ -36,7 +38,18 @@ except Exception:  # pragma: no cover - available only with the core importable
 _CLASSIFIER_PIPELINES: dict[str, Any] = {}
 
 
-def release_unused_pipelines(active_model_names: set[str]) -> tuple[str, ...]:
+def classifier_cache_key(model_name: str, device: int = -1) -> str:
+    """Return the one cache identity for a model placement."""
+    return model_name if device == -1 else f"{model_name}::device={device}"
+
+
+def _cache_key_parts(cache_key: str) -> tuple[str, int]:
+    """Split a cache identity for operator-facing logging only."""
+    model_name, separator, device = cache_key.partition("::device=")
+    return model_name, int(device) if separator else -1
+
+
+def release_unused_pipelines(active_cache_keys: set[str]) -> tuple[str, ...]:
     """Release cached pipelines no longer selected by the active settings.
 
     This changes process memory only: it neither uninstalls a dependency nor
@@ -47,17 +60,17 @@ def release_unused_pipelines(active_model_names: set[str]) -> tuple[str, ...]:
     # Work from a snapshot: input hooks may run concurrently for different
     # sessions, and another one may release the same stale entry first.
     cached_pipelines = _CLASSIFIER_PIPELINES.copy()
-    stale_models = tuple(
-        model_name
-        for model_name in cached_pipelines
-        if model_name.split("::device=", 1)[0] not in active_model_names
+    stale_cache_keys = tuple(
+        cache_key
+        for cache_key in cached_pipelines
+        if cache_key not in active_cache_keys
     )
-    released_models = tuple(
-        model_name
-        for model_name in stale_models
-        if _CLASSIFIER_PIPELINES.pop(model_name, None) is not None
+    released_cache_keys = tuple(
+        cache_key
+        for cache_key in stale_cache_keys
+        if _CLASSIFIER_PIPELINES.pop(cache_key, None) is not None
     )
-    if not released_models:
+    if not released_cache_keys:
         return ()
 
     # Transformers objects can retain reference cycles. Collection makes the
@@ -72,12 +85,13 @@ def release_unused_pipelines(active_model_names: set[str]) -> tuple[str, ...]:
     except Exception:  # pragma: no cover - optional runtime dependency
         pass
 
-    for model_name in released_models:
+    for cache_key in released_cache_keys:
+        model_name, device = _cache_key_parts(cache_key)
         runtime_log.info(
             "[rag-guardrails] released classifier pipeline "
-            f"for inactive model {model_name}"
+            f"for inactive model {model_name}, device={'cpu' if device == -1 else device}"
         )
-    return released_models
+    return released_cache_keys
 
 # A cold model load can involve disk I/O and a Hugging Face download. Only one
 # request may perform that work for a given model, while different models remain
@@ -85,6 +99,7 @@ def release_unused_pipelines(active_model_names: set[str]) -> tuple[str, ...]:
 # later request indefinitely; callers turn the timeout into the normal fail-open
 # classifier behaviour.
 CLASSIFIER_LOAD_WAIT_SECONDS = 5.0
+CLASSIFIER_MAX_INPUT_TOKENS = 1024
 _CLASSIFIER_LOAD_LOCKS: dict[str, Any] = {}
 _CLASSIFIER_LOAD_LOCKS_GUARD = threading.Lock()
 
@@ -173,22 +188,28 @@ def access_remediation(model_name: str, error: Exception) -> str:
     )
 
 
-def classifier_load_error(model_name: str) -> str | None:
+def classifier_load_error(model_name: str, device: int = -1) -> str | None:
     """Why this model is unavailable, or None if it has not failed.
 
     Lets callers keep their own reporting honest — a check that cannot run must
     not be listed among the ones covering a turn.
     """
-    return _FAILED_CLASSIFIER_MODELS.get(model_name)
+    return _FAILED_CLASSIFIER_MODELS.get(classifier_cache_key(model_name, device))
 
 
-def _classifier_load_lock(model_name: str):
-    """Return the single load lock assigned to `model_name`."""
+def _classifier_load_lock(cache_key: str):
+    """Return the single load lock assigned to a cache identity."""
     with _CLASSIFIER_LOAD_LOCKS_GUARD:
-        return _CLASSIFIER_LOAD_LOCKS.setdefault(model_name, threading.Lock())
+        return _CLASSIFIER_LOAD_LOCKS.setdefault(cache_key, threading.Lock())
 
 
-def get_pipeline(model_name: str, token: str | bool = False, **pipeline_kwargs):
+def get_pipeline(
+    model_name: str,
+    token: str | bool = False,
+    *,
+    cache_failure: bool = True,
+    **pipeline_kwargs,
+):
     """Return the cached text-classification pipeline for `model_name`.
 
     Raises `ClassifierUnavailable` for a model whose load already failed, and
@@ -196,15 +217,14 @@ def get_pipeline(model_name: str, token: str | bool = False, **pipeline_kwargs):
     the callers turn into fail-open behaviour: a classifier that cannot run must
     leave the message alone, never take the turn down.
 
-    `pipeline_kwargs` reaches `transformers.pipeline()` and is part of the cache
-    identity only through the model name, which is deliberate: the two guards
-    pass different arguments — `top_k=None` for the one that needs every score —
-    and a model configured one way must not be silently reused with the other
-    configuration. Callers therefore must not vary these arguments for the same
-    model, and today none does: each model belongs to one guard.
+    `pipeline_kwargs` reaches `transformers.pipeline()`. The cache identity is
+    the model name and selected device; `local_files_only` controls only how a
+    model is acquired and deliberately does not create another cache entry.
+    Callers must not vary other pipeline-construction arguments for the same
+    model-and-device pair.
     """
     device = pipeline_kwargs.get("device", -1)
-    cache_key = model_name if device == -1 else f"{model_name}::device={device}"
+    cache_key = classifier_cache_key(model_name, device)
     pipeline = _CLASSIFIER_PIPELINES.get(cache_key)
     if pipeline is not None:
         # INFO for v1, deliberately, even though this fires on every message
@@ -256,11 +276,18 @@ def get_pipeline(model_name: str, token: str | bool = False, **pipeline_kwargs):
 
         from transformers import pipeline as transformers_pipeline
 
-        runtime_log.info(
-            "[rag-guardrails] loading classifier model "
-            f"{model_name} into memory; Transformers will use the local Hugging Face "
-            "cache when available and download missing files if needed"
-        )
+        offline_only = pipeline_kwargs.get("local_files_only") is True
+        if offline_only:
+            runtime_log.info(
+                "[rag-guardrails] warming classifier model "
+                f"{model_name} from locally cached files only"
+            )
+        else:
+            runtime_log.info(
+                "[rag-guardrails] loading classifier model "
+                f"{model_name} into memory; Transformers will use the local Hugging Face "
+                "cache when available and download missing files if needed"
+            )
         try:
             pipeline = transformers_pipeline(
                 "text-classification",
@@ -273,18 +300,26 @@ def get_pipeline(model_name: str, token: str | bool = False, **pipeline_kwargs):
             # kept in the negative cache and handed to callers by
             # `classifier_load_error()`, which is another way for it to reach a log.
             reason = redact_secrets(str(error), token)
-            _FAILED_CLASSIFIER_MODELS[cache_key] = reason
-            runtime_log.warning(
-                "[rag-guardrails] failed to load classifier "
-                f"model {model_name}: {reason}; it will not be retried until the "
-                f"plugin reloads.{access_remediation(model_name, error)}"
-            )
+            if cache_failure:
+                _FAILED_CLASSIFIER_MODELS[cache_key] = reason
+            if cache_failure:
+                runtime_log.warning(
+                    "[rag-guardrails] failed to load classifier "
+                    f"model {model_name}: {reason}; it will not be retried until the "
+                    f"plugin reloads.{access_remediation(model_name, error)}"
+                )
             raise
 
-        runtime_log.info(
-            "[rag-guardrails] classifier model "
-            f"{model_name} loaded and cached in memory"
-        )
+        if offline_only:
+            runtime_log.info(
+                "[rag-guardrails] classifier warm-up loaded model "
+                f"{model_name} into memory"
+            )
+        else:
+            runtime_log.info(
+                "[rag-guardrails] classifier model "
+                f"{model_name} loaded and cached in memory"
+            )
         _CLASSIFIER_PIPELINES[cache_key] = pipeline
         return pipeline
     finally:
@@ -295,15 +330,13 @@ def warm_pipeline(model_name: str, token: str | bool = False, **pipeline_kwargs)
     """Load a cached model without allowing a network download."""
     try:
         local_kwargs = dict(pipeline_kwargs)
-        local_kwargs["model_kwargs"] = {"local_files_only": True}
-        get_pipeline(model_name, token=token, **local_kwargs)
+        local_kwargs["local_files_only"] = True
+        get_pipeline(model_name, token=token, cache_failure=False, **local_kwargs)
     except Exception as error:
-        device = pipeline_kwargs.get("device", -1)
-        cache_key = model_name if device == -1 else f"{model_name}::device={device}"
-        _FAILED_CLASSIFIER_MODELS.pop(cache_key, None)
         runtime_log.warning(
             "[rag-guardrails] classifier warm-up skipped for model "
-            f"{model_name}: {redact_secrets(str(error), token if isinstance(token, str) else None)}"
+            f"{model_name}; it is unavailable from the local cache: "
+            f"{redact_secrets(str(error), token if isinstance(token, str) else None)}"
         )
         return False
     return True

@@ -55,9 +55,11 @@ def reset_classifier_caches():
     """
     runtime_module._CLASSIFIER_PIPELINES.clear()
     runtime_module._FAILED_CLASSIFIER_MODELS.clear()
+    guards._WARMED_CLASSIFIER_CONFIGURATIONS.clear()
     yield
     runtime_module._CLASSIFIER_PIPELINES.clear()
     runtime_module._FAILED_CLASSIFIER_MODELS.clear()
+    guards._WARMED_CLASSIFIER_CONFIGURATIONS.clear()
 
 # The @hook decorator replaces the function with a CatHook object, so the
 # callable under test is reached through `.function`.
@@ -812,6 +814,15 @@ class TestConfiguration:
             checks.DEFAULT_MAX_MESSAGE_CHARS
         )
 
+    def test_fallback_settings_do_not_release_warmed_pipelines(self, monkeypatch):
+        released = []
+        monkeypatch.setattr(guards, "release_unused_pipelines", released.append)
+        cat = make_cat()
+
+        guards.guard_input_message.function(None, cat)
+
+        assert released == []
+
     def test_unavailable_settings_fall_back_and_are_logged_at_warning(
         self, monkeypatch
     ):
@@ -903,6 +914,17 @@ class TestGuardAnnouncement:
     which category is left with no guard at all.
     """
 
+    def test_active_classifier_models_match_the_enabled_guards(self):
+        settings = settings_module.RagGuardrailsSettings(
+            detect_prompt_injection_classifier=True,
+            detect_offensive_input_classifier=True,
+        )
+
+        assert guards.active_classifier_models(settings) == (
+            settings.prompt_injection_classifier_model.value,
+            settings.offensive_input_classifier_model.value,
+        )
+
     @pytest.fixture(autouse=True)
     def forget_previous_announcement(self):
         # Module-level state: without this reset the first test to run would be
@@ -935,6 +957,20 @@ class TestGuardAnnouncement:
                 settings.prompt_injection_classifier_model.value,
                 settings.offensive_input_classifier_model.value,
             }
+        ]
+
+    def test_active_classifier_cache_keys_include_the_selected_device(self, monkeypatch):
+        kept = []
+        monkeypatch.setattr(guards, "release_unused_pipelines", kept.append)
+        settings = settings_module.RagGuardrailsSettings(
+            detect_prompt_injection_classifier=True,
+            classifier_device=settings_module.ClassifierDevice.CUDA_0,
+        )
+
+        guards.announce_active_guards(settings)
+
+        assert kept == [
+            {f"{settings.prompt_injection_classifier_model.value}::device=0"}
         ]
 
     def test_the_announcement_covers_every_category(self, monkeypatch):
@@ -1539,6 +1575,64 @@ class TestActivationAnnouncement:
         assert f"priority={guards.INPUT_GUARD_PRIORITY}" in line
         assert "before_cat_sends_message" in line
 
+    def test_invalid_activation_settings_are_announced_as_configuration_failure(
+        self, monkeypatch
+    ):
+        warnings = []
+        monkeypatch.setattr(guards.log, "warning", warnings.append)
+        guards._ANNOUNCED_SETTINGS_FALLBACK = None
+        plugin = types.SimpleNamespace(load_settings=lambda: {"max_message_chars": -5})
+
+        guards.activated.function(plugin)
+
+        assert any("invalid settings" in line for line in warnings)
+        assert not any("warm-up skipped" in line for line in warnings)
+
+    def test_activation_warm_up_failure_redacts_an_unusually_shaped_token(
+        self, monkeypatch
+    ):
+        token = "opaque-secret-value"
+        warnings = []
+        monkeypatch.setattr(guards.log, "warning", warnings.append)
+        monkeypatch.setattr(
+            guards,
+            "warm_pipeline",
+            lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError(f"failed {token}")),
+        )
+        plugin = types.SimpleNamespace(
+            load_settings=lambda: {
+                "preload_classifiers_on_activation": True,
+                "detect_prompt_injection_classifier": True,
+                "huggingface_token": token,
+            }
+        )
+
+        guards.activated.function(plugin)
+
+        assert any("warm-up skipped" in line for line in warnings)
+        assert not any(token in line for line in warnings)
+
+    def test_activation_warms_each_classifier_configuration_only_once(self, monkeypatch):
+        warmed = []
+        monkeypatch.setattr(
+            guards,
+            "warm_pipeline",
+            lambda model, **kwargs: warmed.append((model, kwargs)) or True,
+        )
+        plugin = types.SimpleNamespace(
+            load_settings=lambda: {
+                "preload_classifiers_on_activation": True,
+                "detect_prompt_injection_classifier": True,
+                "classifier_device": 0,
+            }
+        )
+
+        guards.activated.function(plugin)
+        guards.activated.function(plugin)
+
+        assert len(warmed) == 1
+        assert warmed[0][1]["device"] == 0
+
     def test_activation_is_a_plugin_override_not_a_flow_hook(self):
         # `@plugin` overrides are keyed by function name, so the name is the
         # contract: renaming it silently stops the core from calling it. And it
@@ -1549,6 +1643,12 @@ class TestActivationAnnouncement:
 
 
 class TestSettingsModel:
+    def test_classifier_preload_setting_defaults_to_disabled(self):
+        settings = settings_module.RagGuardrailsSettings()
+
+        assert "preload_classifiers_on_activation" in settings_module.RagGuardrailsSettings.model_fields
+        assert settings.preload_classifiers_on_activation is False
+
     def test_every_verdict_has_a_reply_setting(self):
         # Adding a check without its reply would silently fall back to the
         # model, defeating the guard. This fails the moment that happens.

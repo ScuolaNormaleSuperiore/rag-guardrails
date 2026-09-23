@@ -24,11 +24,11 @@ build context, so every plugin edit invalidates `COPY ./cat` and the rebuild
 reinstalls the dependency stack of every plugin, `torch` included — fifteen
 minutes for a package of a few megabytes.
 
-**What that removal cost is written down in `DEV/AGENTS/ISSUES_TODO.md`**, as
-*Nothing tests the secret scanner, now the last defence for the only token store*,
-because it is a real loss and not a cleanup: nothing verifies the secret scanner's
-regular expressions any more, and this repository already had two patterns that
-silently matched nothing for months. Those tests are how that was found.
+**What that removal cost is recorded as an accepted decision in
+`DEV/AGENTS/ISSUES_RESOLVED.md`**: nothing verifies the staged-secret scanner's
+regular expressions any more. This remains a real loss rather than a cleanup;
+the scanner is retained as a preventive control, but its patterns have no
+dedicated regression coverage.
 
 `tests/integration/` needs the core only because the module under test imports `cat.log` and `cat.mad_hatter.decorators` at import time, not because a Cat must be running. Those tests never contact a live instance: the container is used as an interpreter, not as a server. Automated tests against a running instance do not exist yet; see `What is not automated` below.
 
@@ -79,9 +79,8 @@ The `pre-commit` hook runs `tests/unit` too, and nothing else: a commit must not
 
 **Nothing tests the staged-secret hook any more.** Its regression gate against a
 malformed pattern silently disabling part of the scan was removed on 2026-09-08
-together with its Git dependency; the open issue in
-`DEV/AGENTS/ISSUES_TODO.md` carries what that costs and how to get the coverage
-back without Git.
+together with its Git dependency. This is an accepted coverage gap recorded in
+`DEV/AGENTS/ISSUES_RESOLVED.md`.
 
 Two limits of that gate are worth knowing. It runs `pytest` against the files on disk, not against the staged snapshot, so with unstaged changes in the working tree what passes is not exactly what is being committed. And if no interpreter with `pytest` is available it warns and lets the commit through, on the grounds that blocking for a missing development tool teaches `--no-verify`, which would also disable the secret scan.
 
@@ -146,18 +145,16 @@ involved in choosing that output: the model obeyed an instruction. Its preceding
 `input allowed` line is indistinguishable from the one before a normal answer.
 The logs therefore do not measure how often the recall comes back empty.
 
-### Manual check still outstanding: the tone guard
+### Manual check: the tone guard
 
-The offensive-input guard has **never been exercised through the admin panel**.
-Its decision rule is covered by unit tests built on the scores the real model
-produced, and the classifier was run against that model through the plugin's own
-code path — but nobody has switched the toggle on in the panel and sent a message
-through the running instance.
+The service owner confirmed this check through the admin panel on 2026-09-22;
+the result is recorded in `DOC/ReleaseReview.md`. Its decision rule is also
+covered by unit tests built on the scores the real model produced. Keep the
+procedure below as the reproducible check after a deployment change.
 
-That is the gap only this tier can close, and it is wider than usual here because
-the guard ships **switched off**: every automated test that exercises it has to
-enable it itself, so the path an administrator actually takes is the one path
-never taken.
+The guard ships **switched off**, so every automated test enables it explicitly;
+the procedure remains the only check of the administrator-facing path after a
+deployment change.
 
 Suggested procedure:
 
@@ -176,8 +173,8 @@ Suggested procedure:
    `input allowed` with `offensive_input` among its checks, `output allowed`, and
    the classifier cache-hit line.
 
-The first message after enabling also pays the model load, so expect it to be
-slow — see `DOC/ToneGuards.md`.
+Without optional classifier preload, the first message after enabling also pays
+the model load, so expect it to be slow — see `DOC/ToneGuards.md`.
 
 ### Manual check for the current output privacy guard
 

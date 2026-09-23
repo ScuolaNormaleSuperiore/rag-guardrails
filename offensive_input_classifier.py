@@ -15,6 +15,7 @@ from __future__ import annotations
 
 try:
     from .classifier_runtime import (
+        CLASSIFIER_MAX_INPUT_TOKENS,
         get_pipeline,
         model_labels,
         normalize_scores,
@@ -22,6 +23,7 @@ try:
     )
 except ImportError:  # pragma: no cover - depends on how the module is loaded
     from classifier_runtime import (
+        CLASSIFIER_MAX_INPUT_TOKENS,
         get_pipeline,
         model_labels,
         normalize_scores,
@@ -197,7 +199,14 @@ def classify_offensive_input(
     # derived from the message-length limit, which is a count of characters. The
     # prompt-injection classifier used to do exactly that and no longer does —
     # the two now agree, which is also what a common runner over both will need.
-    scores = normalize_scores(pipeline(text, top_k=None, truncation=True))
+    scores = normalize_scores(
+        pipeline(
+            text,
+            top_k=None,
+            truncation=True,
+            max_length=CLASSIFIER_MAX_INPUT_TOKENS,
+        )
+    )
 
     total = 0.0
     dominant_label: str | None = None

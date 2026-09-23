@@ -108,6 +108,15 @@ class TestFailedLoadIsNotRetried:
     def test_a_model_that_never_failed_reports_no_error(self):
         assert runtime.classifier_load_error(ANOTHER_MODEL) is None
 
+    def test_gpu_load_error_is_read_with_the_same_device_key(self, monkeypatch):
+        self.failing_transformers([], monkeypatch)
+
+        with pytest.raises(Exception):
+            runtime.get_pipeline(A_MODEL, device=0)
+
+        assert runtime.classifier_load_error(A_MODEL) is None
+        assert runtime.classifier_load_error(A_MODEL, device=0) is not None
+
     def test_one_model_failing_does_not_block_another(self, monkeypatch):
         def selectively_explode(task, model, token=None, **kwargs):
             if model.startswith("meta-llama/"):
@@ -127,6 +136,11 @@ class TestFailedLoadIsNotRetried:
 
 
 class TestPipelineCache:
+    def test_cache_key_round_trips_model_and_device(self):
+        assert runtime.classifier_cache_key(A_MODEL) == A_MODEL
+        assert runtime.classifier_cache_key(A_MODEL, 0) == f"{A_MODEL}::device=0"
+        assert runtime._cache_key_parts(f"{A_MODEL}::device=0") == (A_MODEL, 0)
+
     def test_pipeline_is_cached_per_model(self, monkeypatch):
         calls = []
 
@@ -155,6 +169,19 @@ class TestPipelineCache:
         assert cpu is not gpu
         assert calls == [{}, {"device": 0}]
 
+    def test_gpu_pipeline_is_reused_for_the_same_device(self, monkeypatch):
+        calls = []
+        fake_transformers(
+            monkeypatch,
+            lambda task, model, token=None, **kwargs: calls.append(kwargs) or object(),
+        )
+
+        first = runtime.get_pipeline(A_MODEL, device=0)
+        second = runtime.get_pipeline(A_MODEL, device=0)
+
+        assert first is second
+        assert calls == [{"device": 0}]
+
     def test_warm_up_uses_local_files_only(self, monkeypatch):
         captured = {}
         fake_transformers(
@@ -163,22 +190,47 @@ class TestPipelineCache:
         )
 
         assert runtime.warm_pipeline(A_MODEL) is True
-        assert captured["model_kwargs"] == {"local_files_only": True}
+        assert captured["local_files_only"] is True
 
     def test_failed_warm_up_does_not_prevent_normal_later_load(self, monkeypatch):
         attempts = []
+        infos, warnings = [], []
 
         def pipeline(task, model, token=None, **kwargs):
             attempts.append(kwargs)
-            if kwargs.get("model_kwargs"):
+            if kwargs.get("local_files_only"):
                 raise OSError("not cached")
             return object()
 
         fake_transformers(monkeypatch, pipeline)
+        monkeypatch.setattr(runtime.runtime_log, "info", infos.append)
+        monkeypatch.setattr(runtime.runtime_log, "warning", warnings.append)
 
         assert runtime.warm_pipeline(A_MODEL) is False
+        assert runtime.classifier_load_error(A_MODEL) is None
         assert runtime.get_pipeline(A_MODEL) is not None
         assert len(attempts) == 2
+        assert any("locally cached files only" in line for line in infos)
+        assert any("unavailable from the local cache" in line for line in warnings)
+        assert not any("will not be retried" in line for line in warnings)
+
+    def test_warm_up_preserves_an_existing_load_failure(self, monkeypatch):
+        attempts = []
+
+        def pipeline(task, model, token=None, **kwargs):
+            attempts.append(kwargs)
+            raise OSError("gated model")
+
+        fake_transformers(monkeypatch, pipeline)
+
+        with pytest.raises(OSError):
+            runtime.get_pipeline(A_MODEL)
+
+        reason = runtime.classifier_load_error(A_MODEL)
+        assert reason is not None
+        assert runtime.warm_pipeline(A_MODEL) is False
+        assert runtime.classifier_load_error(A_MODEL) == reason
+        assert len(attempts) == 1
 
     def test_unused_pipelines_are_released_from_process_memory(self, monkeypatch):
         kept = object()
@@ -226,6 +278,37 @@ class TestPipelineCache:
         runtime.release_unused_pipelines(set())
 
         assert calls == ["cleared"]
+
+    def test_device_change_releases_the_pipeline_for_the_old_device(self, monkeypatch):
+        cpu_pipeline = object()
+        gpu_cache_key = f"{A_MODEL}::device=0"
+        runtime._CLASSIFIER_PIPELINES.update(
+            {A_MODEL: cpu_pipeline, gpu_cache_key: object()}
+        )
+        calls = []
+        fake_torch = type(
+            "Torch",
+            (),
+            {
+                "cuda": type(
+                    "Cuda",
+                    (),
+                    {
+                        "is_available": staticmethod(lambda: True),
+                        "empty_cache": staticmethod(lambda: calls.append("cleared")),
+                    },
+                )()
+            },
+        )
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+        monkeypatch.setattr(runtime.gc, "collect", lambda: None)
+        lines = []
+        monkeypatch.setattr(runtime.runtime_log, "info", lines.append)
+
+        assert runtime.release_unused_pipelines({A_MODEL}) == (gpu_cache_key,)
+        assert runtime._CLASSIFIER_PIPELINES == {A_MODEL: cpu_pipeline}
+        assert calls == ["cleared"]
+        assert any(f"inactive model {A_MODEL}, device=0" in line for line in lines)
 
     def test_load_arguments_reach_transformers(self, monkeypatch):
         captured = {}

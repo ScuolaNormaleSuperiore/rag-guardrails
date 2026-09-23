@@ -6,6 +6,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 ## [1.0.3] - 2026-09-22
+- AI Code review
 - Bug-fixing: Fixed bugs and security issues
 - Updated the documentation
 

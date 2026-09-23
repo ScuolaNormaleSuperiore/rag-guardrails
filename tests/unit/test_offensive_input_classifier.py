@@ -238,7 +238,7 @@ class TestHowThePipelineIsCalled:
 
         offensive.classify_offensive_input("any", model_name=MODEL)
 
-        assert pipeline.calls == [{"top_k": None, "truncation": True}]
+        assert pipeline.calls == [{"top_k": None, "truncation": True, "max_length": 1024}]
 
     @pytest.mark.parametrize("nested", [True, False])
     def test_both_response_shapes_are_understood(self, nested):
