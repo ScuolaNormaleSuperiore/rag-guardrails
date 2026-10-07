@@ -309,10 +309,20 @@ def _read_settings(read_stored_settings) -> tuple[RagGuardrailsSettings, bool]:
         announce_settings_fallback("settings are empty")
         return RagGuardrailsSettings(), False
 
+    # `Exception` and not only `ValidationError`: a validator that raises any
+    # other type escapes pydantic unconverted, and here that used to make both
+    # hooks raise on every turn, so the core skipped every guard and only its
+    # own generic error line said anything. Falling back to the defaults keeps
+    # the turn guarded and the warning below names what happened.
     try:
         settings = RagGuardrailsSettings.model_validate(stored)
     except ValidationError as error:
         announce_settings_fallback(f"invalid settings ({error})")
+        return RagGuardrailsSettings(), False
+    except Exception as error:
+        announce_settings_fallback(
+            f"invalid settings ({type(error).__name__}: {error})"
+        )
         return RagGuardrailsSettings(), False
 
     _ANNOUNCED_SETTINGS_FALLBACK = None

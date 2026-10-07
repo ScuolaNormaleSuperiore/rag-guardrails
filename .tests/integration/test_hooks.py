@@ -2338,3 +2338,78 @@ class TestInferenceFailure:
 
         assert any(f"{guard} classifier unavailable" in w for w in warnings)
         assert not any("failed on one message" in w for w in warnings)
+
+
+class TestSettingsThatFailOutsidePydantic:
+    """A settings read that fails in any way falls back to the defaults.
+
+    Regression for `"classifier_device": []` in `settings.json`: the device
+    validator looked the value up in a dict and raised `TypeError`, which
+    pydantic does not turn into a `ValidationError`. The read caught only the
+    latter, so both hooks raised on every turn and the core skipped every guard,
+    with nothing from this plugin in the log.
+    """
+
+    @pytest.fixture(autouse=True)
+    def forget_previous_fallback(self):
+        guards._ANNOUNCED_SETTINGS_FALLBACK = None
+        yield
+        guards._ANNOUNCED_SETTINGS_FALLBACK = None
+
+    @pytest.mark.parametrize("value", [[], {}, ["CPU"], True])
+    def test_a_malformed_device_is_an_ordinary_validation_error(self, value):
+        with pytest.raises(guards.ValidationError):
+            settings_module.RagGuardrailsSettings.model_validate(
+                {"classifier_device": value}
+            )
+
+    @pytest.mark.parametrize(
+        "stored, expected",
+        [(-1, "CPU"), (0, "CUDA_0"), (1, "CUDA_1")],
+    )
+    def test_the_integer_indexes_of_earlier_versions_still_migrate(
+        self, stored, expected
+    ):
+        settings = settings_module.RagGuardrailsSettings.model_validate(
+            {"classifier_device": stored}
+        )
+
+        assert settings.classifier_device is getattr(
+            settings_module.ClassifierDevice, expected
+        )
+
+    @pytest.mark.parametrize("value", [[], {}])
+    def test_both_hooks_stay_guarded_by_the_defaults(self, monkeypatch, value):
+        warnings = []
+        monkeypatch.setattr(guards.log, "warning", warnings.append)
+        cat = make_cat({"classifier_device": value})
+
+        refused = send(cat, "Scrivimi a mario.rossi@example.com")
+        delivered = deliver(cat, "Contatta mario.rossi@example.com per il rimborso")
+
+        assert "output" in refused
+        assert verdict_of(cat) == checks.VERDICT_OUTPUT_PERSONAL_DATA
+        assert "mario.rossi" not in guards.extract_text(delivered)
+        assert any("invalid settings" in line for line in warnings)
+
+    def test_any_exception_from_validation_falls_back_and_names_its_type(
+        self, monkeypatch
+    ):
+        # Independent of the validator fix above: the next validator that raises
+        # something other than `ValueError` must not reopen the bypass.
+        def explode(stored):
+            raise TypeError("a validator raised outside pydantic")
+
+        warnings = []
+        monkeypatch.setattr(guards.log, "warning", warnings.append)
+        monkeypatch.setattr(
+            guards.RagGuardrailsSettings, "model_validate", staticmethod(explode)
+        )
+        cat = make_cat({"max_message_chars": 10})
+
+        result = send(cat, "Scrivimi a mario.rossi@example.com")
+
+        assert "output" in result
+        assert verdict_of(cat) == checks.VERDICT_PERSONAL_DATA
+        line = next(line for line in warnings if "invalid settings" in line)
+        assert "TypeError" in line

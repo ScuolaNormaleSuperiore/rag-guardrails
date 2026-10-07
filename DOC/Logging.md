@@ -174,7 +174,10 @@ shipped defaults and says so at `WARNING`, deduplicated:
 Three conditions produce it, and the first word of the reason tells them apart:
 `settings unavailable (…)` when the core's own read raises, `settings are empty`
 when `settings.json` is empty or `null`, and `invalid settings (…)` when it does
-not validate.
+not validate. The last one also covers a validator that fails with an exception
+other than pydantic's own, whose type then opens the reason — `invalid settings
+(TypeError: …)` — so a stored value no validator anticipated still falls back to
+the defaults instead of switching the guards off.
 
 **`WARNING` and not `INFO`, because this is a reduction of protection rather
 than a normal event.** The fallback discards every configured value at once: the

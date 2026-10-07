@@ -359,7 +359,19 @@ class RagGuardrailsSettings(BaseModel):
     @field_validator("classifier_device", mode="before")
     @classmethod
     def _migrate_classifier_device(cls, value):
-        return {-1: ClassifierDevice.CPU, 0: ClassifierDevice.CUDA_0, 1: ClassifierDevice.CUDA_1}.get(value, value)
+        # Only the integer indexes an earlier version stored are translated;
+        # anything else goes to the enum, which rejects it as an ordinary
+        # validation error. Looking an unhashable value up in the dict raised
+        # `TypeError` instead, which pydantic does not convert, and the
+        # settings read then failed in a way the fallback did not catch.
+        # `bool` is excluded because `True == 1` would map it to the second GPU.
+        if isinstance(value, int) and not isinstance(value, bool):
+            return {
+                -1: ClassifierDevice.CPU,
+                0: ClassifierDevice.CUDA_0,
+                1: ClassifierDevice.CUDA_1,
+            }.get(value, value)
+        return value
 
     @field_validator("help_desk_email")
     @classmethod
