@@ -111,7 +111,7 @@ class TestShippedSettings:
 
     The source is read as text rather than imported, so this module keeps
     needing nothing but the standard library, which is what allows it to live in
-    tests/unit.
+    .tests/unit.
     """
 
     def settings_source(self) -> str:

@@ -19,8 +19,8 @@ def load_runner():
 def test_pytest_args_targets_only_the_requested_suite():
     runner = load_runner()
 
-    assert runner.pytest_args(False, "tests/unit")[-1] == "tests/unit"
-    assert runner.pytest_args(False, "tests/integration")[-1] == "tests/integration"
+    assert runner.pytest_args(False, ".tests/unit")[-1] == ".tests/unit"
+    assert runner.pytest_args(False, ".tests/integration")[-1] == ".tests/integration"
 
 
 def test_pytest_args_without_a_target_runs_the_full_suite_in_detail():

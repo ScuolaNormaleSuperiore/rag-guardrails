@@ -5,6 +5,20 @@ Notable changes to `RAG Guardrails`. The format follows
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [Unreleased]
+### Fixed
+- Cheshire Cat no longer imports the test suite on every activation. The tests
+  moved from `tests/` to the hidden `.tests/`, which the core's recursive
+  `glob` does not enter: the Cat now imports 8 files instead of 17. Six test
+  files put the plugin folder first on `sys.path`, so inside the Cat process a
+  bare `import settings` written by another plugin could resolve to this
+  plugin's `settings.py`.
+### Changed
+- `test_importability.py` is replaced by `test_repository_layout.py`, which
+  fails on any file the Cat would import that no plugin code needs.
+- The pre-commit hook now blocks the commit when the unit-test folder is
+  missing, instead of reporting nothing to run.
+
 ## [1.0.3] - 2026-09-22
 - AI Code review
 - Bug-fixing: Fixed bugs and security issues

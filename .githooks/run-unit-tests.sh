@@ -9,16 +9,20 @@ echo "[RAG-GUARDS pre-commit] Running unit tests..." >&2
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-# Only tests/unit runs here: it needs nothing but pytest and finishes quickly.
-# tests/integration stays out on purpose, because it needs the Cheshire Cat core
+# Only .tests/unit runs here: it needs nothing but pytest and finishes quickly.
+# .tests/integration stays out on purpose, because it needs the Cheshire Cat core
 # importable, in practice the running container. A commit must not depend on
 # Docker being up, otherwise the hook either blocks legitimate commits or skips
 # in silence. Run the full suite before pushing instead.
-test_target="tests/unit"
+test_target=".tests/unit"
 
+# A missing test folder is an error, never a pass: the tests moved once (tests/
+# became .tests/) and a hook that said "nothing to run" would have skipped them
+# in silence.
 if [ ! -d "$test_target" ]; then
-	echo "[RAG-GUARDS pre-commit] $test_target not found, nothing to run." >&2
-	exit 0
+	echo "[RAG-GUARDS pre-commit] $test_target not found: the unit tests cannot run." >&2
+	echo "Commit blocked: a missing test folder must not read as a pass." >&2
+	exit 1
 fi
 
 python_bin=""

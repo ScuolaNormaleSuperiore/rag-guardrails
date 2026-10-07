@@ -1656,7 +1656,7 @@ class TestSettingsModel:
         # The source is `ALL_VERDICTS`, not introspection over the module: a
         # discovery rule based on a name prefix keeps passing on an empty set
         # the moment the convention changes. That `ALL_VERDICTS` is itself
-        # complete is asserted in tests/unit/test_checks.py.
+        # complete is asserted in .tests/unit/test_checks.py.
         missing = set(checks.ALL_VERDICTS) - set(guards.REPLY_SETTING_BY_VERDICT)
         assert not missing, f"verdicts without a reply setting: {sorted(missing)}"
 
@@ -1905,7 +1905,7 @@ class TestOffensiveInputGuard:
     """The tone guard: last of the input checks, and the only one shipped off.
 
     The classifier itself is always stubbed here — the decision rule is tested in
-    `tests/unit/test_offensive_input_classifier.py`, against the scores the real
+    `.tests/unit/test_offensive_input_classifier.py`, against the scores the real
     model produced. What these assert is the wiring: that the verdict reaches the
     right reply, that the order between the two classifiers holds, and that a
     broken model leaves the turn alone.

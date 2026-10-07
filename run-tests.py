@@ -28,13 +28,13 @@ def parse_args() -> argparse.Namespace:
         "-u",
         "--unit",
         action="store_true",
-        help="run only tests/unit with the current local Python interpreter",
+        help="run only .tests/unit with the current local Python interpreter",
     )
     scope.add_argument(
         "-i",
         "--integration",
         action="store_true",
-        help="run only tests/integration in the Cheshire Cat container",
+        help="run only .tests/integration in the Cheshire Cat container",
     )
     parser.add_argument(
         "-d",
@@ -74,7 +74,7 @@ def run_local_unit_tests(detailed: bool) -> int:
         print("Or use the suite in the container:  python run-tests.py", file=sys.stderr)
         return 1
 
-    result = subprocess.run(pytest_args(detailed, "tests/unit"), cwd=REPO_ROOT)
+    result = subprocess.run(pytest_args(detailed, ".tests/unit"), cwd=REPO_ROOT)
     return result.returncode
 
 
@@ -160,7 +160,7 @@ def run_container_suite(detailed: bool, integration_only: bool = False) -> int:
         "pytest",
     ]
     if integration_only:
-        command.append("tests/integration")
+        command.append(".tests/integration")
     if detailed:
         command.append("-v")
 

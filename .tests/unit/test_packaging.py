@@ -7,7 +7,7 @@ makes the whole plugin unloadable. Nothing in the build catches it, because the
 build only checks that the files it *does* list exist.
 
 These tests need no Cheshire Cat: `package-plugin.py` imports nothing from
-`cat`, which is what keeps them in `tests/unit`.
+`cat`, which is what keeps them in `.tests/unit`.
 """
 
 import importlib.util
@@ -115,6 +115,6 @@ class TestReleasePackageContents:
         private = {
             name
             for name in shipped
-            if name.startswith(("DEV/", "DOC/", "tests/", ".githooks/"))
+            if name.startswith(("DEV/", "DOC/", ".tests/", "tests/", ".githooks/"))
         }
         assert not private, f"development material in the package: {sorted(private)}"

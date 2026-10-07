@@ -9,10 +9,10 @@ Guardrails fail silently: when a control stops working the chatbot does not rais
 | `checks.py` | All decision logic: thresholds, verdicts, rules. Imports nothing from `cat` | No |
 | `settings.py` | The settings model the admin form is built from, and the shipped defaults | Yes |
 | `rag_guardrails.py` | The hooks only: read from the Cat, delegate to `checks`, write back | Yes |
-| `tests/unit/` | Pure logic and shipped metadata. Plain `pytest`, no Cheshire Cat at all | No |
-| `tests/integration/` | Hook wiring and configuration, against a fake `cat` object | Yes |
+| `.tests/unit/` | Pure logic and shipped metadata. Plain `pytest`, no Cheshire Cat at all | No |
+| `.tests/integration/` | Hook wiring and configuration, against a fake `cat` object | Yes |
 
-The test folders are the classification: what goes in `tests/unit/` must import nothing from `cat`, and a file that breaks that rule fails loudly instead of being silently skipped. Everything under `tests/unit/` therefore runs anywhere, which is what makes the fast local loop possible.
+The test folders are the classification: what goes in `.tests/unit/` must import nothing from `cat`, and a file that breaks that rule fails loudly instead of being silently skipped. Everything under `.tests/unit/` therefore runs anywhere, which is what makes the fast local loop possible.
 
 **The whole suite now runs in both environments with no skips**, and that took
 removing something rather than adding it. `tests/unit/test_git_hooks.py` executed
@@ -30,9 +30,13 @@ regular expressions any more. This remains a real loss rather than a cleanup;
 the scanner is retained as a preventive control, but its patterns have no
 dedicated regression coverage.
 
-`tests/integration/` needs the core only because the module under test imports `cat.log` and `cat.mad_hatter.decorators` at import time, not because a Cat must be running. Those tests never contact a live instance: the container is used as an interpreter, not as a server. Automated tests against a running instance do not exist yet; see `What is not automated` below.
+`.tests/integration/` needs the core only because the module under test imports `cat.log` and `cat.mad_hatter.decorators` at import time, not because a Cat must be running. Those tests never contact a live instance: the container is used as an interpreter, not as a server. Automated tests against a running instance do not exist yet; see `What is not automated` below.
 
-One thing to know before adding files here: the Cat imports every `.py` it finds in the plugin folder, recursively, including `tests/`, and it does so under a package name where a bare `import checks` does not resolve. Left alone, that makes the core log `Unable to load plugin rag-guardrails` on every activation, for a plugin that is in fact running — which on a guardrail component reads as *the controls are not active*. Every test file that reaches the plugin's own modules therefore puts the plugin folder on `sys.path` before importing, which keeps a genuine breakage failing rather than skipping. `tests/unit/test_importability.py` is what enforces it: it imports every file under `tests/` in a clean interpreter, resetting the import state between them so no file benefits from a fix another one performed, and fails naming the file that forgot. A sibling plugin in the same installation shows what it prevents: fourteen `Unable to load plugin` lines, every one from its own `tests/`. It is also why `pytest.ini` and the two runner scripts are deliberately not Python files.
+**Why the folder is hidden.** The Cat imports every `.py` it finds in the plugin folder, recursively — `glob("**/*.py", recursive=True)` in `cat/mad_hatter/plugin.py`, with no exclusions — except what sits in a hidden folder, which `glob` does not enter. The tests used to live in a visible `tests/`, so the Cat imported all of them on every activation, pytest included. Six of them put the plugin folder first on `sys.path`, which inside the Cat process made a bare `import settings` written by *another* plugin resolve to this plugin's `settings.py`: the mechanism that once broke a neighbouring plugin on every activation. Since 2026-10-07 they live in `.tests/`, and the Cat imports eight files: the six runtime modules and the two runner scripts, which run nothing on import.
+
+`.tests/unit/test_repository_layout.py` keeps it so. It starts from the files that register something with the Cat — hooks, plugin overrides, tools, forms, endpoints — follows their imports, and fails on any `.py` the Cat would import that no plugin code needs, with `run-tests.py` and `package-plugin.py` as the only listed exceptions. It also checks that `pytest.ini` points at `.tests`, that `pytest .` still collects the hidden folder, and that the pre-commit hook fails rather than passes when the folder is missing. It replaces `test_importability.py`, which only kept the imports from raising and left the cause in place.
+
+Two things to know before adding files. A new test goes under `.tests/`, never in a new visible folder. And pytest skips folders that start with a dot by default: `pytest.ini` therefore overrides `norecursedirs` without the `.*` pattern, and without that override `pytest .` collects nothing. Some tools, ripgrep among them, also skip hidden folders unless asked. `pytest.ini` and the runner scripts are deliberately not Python files, or they would be imported too.
 
 The `@hook` decorator turns functions into non-callable `CatHook` objects. Tests reach the real function through `.function`.
 
@@ -40,15 +44,15 @@ The `@hook` decorator turns functions into non-callable `CatHook` objects. Tests
 
 Two options, depending on which tests you want to run.
 
-Local interpreter, `tests/unit` only:
+Local interpreter, `.tests/unit` only:
 
 ```bash
 python -m pip install pytest phonenumberslite
 ```
 
-`phonenumberslite` is there because `checks.py` imports it at module level: the personal-data guard validates phone numbers against a numbering plan rather than matching a shape. Without it `tests/unit` fails at import, loudly, which is the wanted outcome: a guard whose behaviour depends on what happens to be installed is worse than one that refuses to start.
+`phonenumberslite` is there because `checks.py` imports it at module level: the personal-data guard validates phone numbers against a numbering plan rather than matching a shape. Without it `.tests/unit` fails at import, loudly, which is the wanted outcome: a guard whose behaviour depends on what happens to be installed is worse than one that refuses to start.
 
-It is not the plugin's only runtime dependency — `requirements.txt` also declares `transformers` and `torch` for the optional local classifiers, and the core installs all three on activation. **They are deliberately absent from the command above**, and that is not an oversight: both `prompt_injection_classifier.py` and `offensive_input_classifier.py` import `transformers` lazily, inside `_get_pipeline()`, so nothing under `tests/unit` touches it — the classifier tests exercise the decision logic around a stubbed pipeline. Adding `torch` to a local install would cost gigabytes and buy nothing. If a future test needs the real pipeline it belongs in `tests/integration/`, where the container already has it.
+It is not the plugin's only runtime dependency — `requirements.txt` also declares `transformers` and `torch` for the optional local classifiers, and the core installs all three on activation. **They are deliberately absent from the command above**, and that is not an oversight: both `prompt_injection_classifier.py` and `offensive_input_classifier.py` import `transformers` lazily, inside `_get_pipeline()`, so nothing under `.tests/unit` touches it — the classifier tests exercise the decision logic around a stubbed pipeline. Adding `torch` to a local install would cost gigabytes and buy nothing. If a future test needs the real pipeline it belongs in `.tests/integration/`, where the container already has it.
 
 Container, whole suite:
 
@@ -73,9 +77,9 @@ python run-tests.py --detailed      # both, listing every test name
 
 Because the exit code is pytest's own, the script can be reused from a git hook or from CI. If a prerequisite is missing, no interpreter with `pytest`, container not running, `compose.yml` not where expected, it says which command fixes it instead of failing obscurely.
 
-**CI runs the unit tests only.** `.github/workflows/tests.yml` calls `python run-tests.py --unit` on every push to `main` and on every pull request, against Python 3.10, 3.11 and 3.12. It builds no container on purpose: `tests/integration` stays a runner job before pushing, and a workflow that built the image would pay for the whole dependency stack, `torch` included, on every commit.
+**CI runs the unit tests only.** `.github/workflows/tests.yml` calls `python run-tests.py --unit` on every push to `main` and on every pull request, against Python 3.10, 3.11 and 3.12. It builds no container on purpose: `.tests/integration` stays a runner job before pushing, and a workflow that built the image would pay for the whole dependency stack, `torch` included, on every commit.
 
-The `pre-commit` hook runs `tests/unit` too, and nothing else: a commit must not depend on Docker being up, or the hook would either block legitimate commits or skip in silence. `tests/integration` is for the runners, before pushing.
+The `pre-commit` hook runs `.tests/unit` too, and nothing else: a commit must not depend on Docker being up, or the hook would either block legitimate commits or skip in silence. `.tests/integration` is for the runners, before pushing.
 
 **Nothing tests the staged-secret hook any more.** Its regression gate against a
 malformed pattern silently disabling part of the scan was removed on 2026-09-08
@@ -89,7 +93,7 @@ The Python runner handles both Compose v2 and the standalone `docker-compose` bi
 Calling `pytest` directly works too. Locally:
 
 ```bash
-python -m pytest tests/unit
+python -m pytest .tests/unit
 ```
 
 In the container:
@@ -100,13 +104,13 @@ docker compose exec -w /app/cat/plugins/rag-guardrails cheshire-cat-core python 
 
 From Git Bash on Windows that same direct `docker compose exec -w ...` command fails with `Cwd must be an absolute path`, because the shell rewrites the `-w` path. `run-tests.py` handles that case automatically.
 
-No `PYTHONPATH` is needed: `pytest.ini` declares `pythonpath = . /app`, where `.` makes the plugin modules importable and `/app` makes the core importable inside the container. A path that does not exist is ignored, so the same file works on a developer machine. Without that second entry `tests/integration/` is skipped rather than failed, which reads as a success.
+No `PYTHONPATH` is needed: `pytest.ini` declares `pythonpath = . /app`, where `.` makes the plugin modules importable and `/app` makes the core importable inside the container. A path that does not exist is ignored, so the same file works on a developer machine. Without that second entry `.tests/integration/` is skipped rather than failed, which reads as a success.
 
 ## What is not automated
 
 Verification against a real instance is currently manual: activate the plugin, send messages through `POST /message`, and read `docker compose logs -f cheshire-cat-core` to confirm which code path ran. A correct-looking answer does not prove it came from this plugin; the log lines do.
 
-This tier matters because it catches what the other two cannot. The interaction with the `Rate Limiter` plugin is the case in point: its checks used to intercept messages before this plugin ever saw them, and nothing in the code of either plugin showed it. The hook priority now settles who answers, and an integration test guards the priority — it lives in `tests/integration/test_hooks.py`, because reading a hook's priority means importing the module that registers it, and that imports `cat` — but the ordering itself is only ever confirmed on a running instance.
+This tier matters because it catches what the other two cannot. The interaction with the `Rate Limiter` plugin is the case in point: its checks used to intercept messages before this plugin ever saw them, and nothing in the code of either plugin showed it. The hook priority now settles who answers, and an integration test guards the priority — it lives in `.tests/integration/test_hooks.py`, because reading a hook's priority means importing the module that registers it, and that imports `cat` — but the ordering itself is only ever confirmed on a running instance.
 
 The same tier is where another plugin's side effects show up. Above its own `max_prompt_length`, Rate Limiter still records an infraction and suspends the user for 5, 15 or 60 minutes, silently blocking their next legitimate messages, even though the reply delivered is this plugin's. No test can see that either.
 
