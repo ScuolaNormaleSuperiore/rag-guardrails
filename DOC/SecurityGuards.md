@@ -36,7 +36,10 @@ The guard uses two independent detectors.
 2. Local classifier
 
 - implemented through `transformers.pipeline("text-classification", ...)`
-- runs only if the custom detector does not block first
+- runs only if the custom detector does not block first, and not at all when
+  an earlier `fast_reply` hook has already answered the turn — the Rate
+  Limiter suspending a user, for instance — since no retrieval or generation
+  follows in that case. The same holds for the tone classifier
 - uses the configured model and threshold
 - truncates classifier input to 512 tokens — about 2,000 characters of Italian —
   independently of the message-length guard, so inference stays bounded when

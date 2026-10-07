@@ -43,6 +43,7 @@ conversation history.
 
 import threading
 import time
+from collections.abc import Mapping
 from typing import NamedTuple
 
 from cat.log import log
@@ -908,6 +909,19 @@ def detect_offensive_input(
     )
 
 
+def another_plugin_answered(fast_reply) -> bool:
+    """Whether a hook that ran earlier on `fast_reply` already answered the turn.
+
+    The two shapes the core accepts as an answer (`stray_cat.py`): a mapping
+    with an `output` key, and a `CatMessage`. The value starts as `{}` and a hook
+    returning `None` leaves it unchanged, so anything that is not a mapping is a
+    message object a previous hook returned.
+    """
+    if isinstance(fast_reply, Mapping):
+        return "output" in fast_reply
+    return fast_reply is not None
+
+
 def resolve_huggingface_token(settings: RagGuardrailsSettings) -> str | bool:
     """Return the configured token, or disable implicit Hub authentication."""
     token = settings.huggingface_token.strip()
@@ -950,7 +964,16 @@ def guard_input_message(fast_reply, cat):
     # two classifiers earn their place only by reporting that they looked.
     checks_that_ran = list(deterministic_check_names(settings))
 
-    if verdict is None:
+    # When another plugin has already answered — the Rate Limiter suspending a
+    # user, for instance — the turn reaches neither retrieval nor generation
+    # whatever this hook does, so the classifiers would only decide which refusal
+    # text the user reads, at up to about a second each. They are skipped. The
+    # deterministic checks still run and still replace that reply, because they
+    # cost hundredths of a millisecond. Before this, a suspended user who kept
+    # writing still cost classifier inference on every message.
+    answered_elsewhere = another_plugin_answered(fast_reply)
+
+    if verdict is None and not answered_elsewhere:
         injection = detect_prompt_injection_with_classifier(text, settings)
         if injection.ran:
             checks_that_ran.append("injection_classifier")
@@ -958,7 +981,7 @@ def guard_input_message(fast_reply, cat):
             verdict = VERDICT_PROMPT_INJECTION
             detail = injection.detail
 
-    if verdict is None:
+    if verdict is None and not answered_elsewhere:
         # Last, and the order decides one thing worth knowing: a message that is
         # both offensive and an injection attempt is reported as
         # `prompt_injection`, because an attack on the assistant is the more
@@ -980,11 +1003,14 @@ def guard_input_message(fast_reply, cat):
         # millisecond, and `latency_ms=0.0` reads as a broken timer rather than
         # as a fast path. The classifier, when it runs, is three orders of
         # magnitude above that and stays readable either way.
+        # `reply=another_plugin` says why the classifiers are missing from
+        # `checks` and that the user receives a reply this plugin did not write.
+        reply_source = ", reply=another_plugin" if answered_elsewhere else ""
         log.info(
             f"[rag-guardrails] input allowed, "
             f"stage='{STAGE_INPUT}', "
             f"checks={'+'.join(checks_that_ran) or 'none'}, "
-            f"latency_ms={elapsed_ms:.2f}, turn={turn_id}"
+            f"latency_ms={elapsed_ms:.2f}{reply_source}, turn={turn_id}"
         )
         return fast_reply
 

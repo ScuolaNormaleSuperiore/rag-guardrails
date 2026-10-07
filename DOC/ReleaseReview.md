@@ -82,6 +82,21 @@ machine: model inference, when enabled, runs locally on the downloaded files.
 > them. Enabling one requires the corresponding operational review, including
 > outbound access to `huggingface.co`; the tone model is about 1.1 GB.
 
+> **Update 2026-10-07, maintainer.** Both classifier guards are enabled in
+> production, which the decision above allows when the service needs them.
+> Whether the operational review it requires was carried out is not recorded
+> here. Three consequences follow, and all three are open:
+>
+> - the tone guard runs on a threshold taken from a seven-message probe; the
+>   calibration on real traffic, closed on 2026-09-22 with the condition «reopen
+>   before any production activation», is reopened in `DEV/AGENTS/ISSUES_TODO.md`;
+> - the 512-token input bound is not yet released. Until it is, an installation
+>   whose length limit is above about 2,000 characters lets a longer message
+>   pass the tone guard unclassified, and pays up to 5.6 s per message in the
+>   prompt-injection classifier;
+> - classifier latency under concurrent turns, on the production hardware, has
+>   not been measured.
+
 ## 5. Where secrets live
 
 One credential is in play: a Hugging Face read token, needed only by the two

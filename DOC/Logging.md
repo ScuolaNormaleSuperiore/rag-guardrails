@@ -156,6 +156,16 @@ settings instead, so it named the classifier on every one of those turns while
 the deduplicated warning appeared once — which made the log say the opposite of
 what had happened, on exactly the turns where it mattered.
 
+When an earlier `fast_reply` hook — another plugin — has already answered the
+turn, the classifiers are skipped and the line says so before the `turn` token:
+
+```text
+[rag-guardrails] input allowed, stage='input', checks=length+injection_patterns+personal_data, latency_ms=0.04, reply=another_plugin, turn=00A1
+```
+
+The user then reads the other plugin's reply. A deterministic refusal still
+replaces it and is logged as `input blocked`, as on any other turn.
+
 The two lines are mutually exclusive with their `blocked` counterparts, so
 counting either one by grepping cannot double count a turn.
 

@@ -55,9 +55,13 @@ oversight, and it has two reasons:
   earlier holds only for very short messages. With the prompt-injection
   classifier also enabled, the two costs add up, because they run one after
   the other;
-- its precision on real help-desk traffic has not been measured. There is no
-  plan to enable the guard in production and no authorised, anonymised corpus
-  for calibration.
+- its precision on real help-desk traffic has not been measured, and there is
+  no authorised, anonymised corpus for calibration yet.
+
+The default is still `False`, but the guard **is enabled in production**
+(recorded 2026-10-07), on the threshold below. Until the calibration on real
+traffic is done — an open issue — treat both its refusals and its misses on
+production traffic as unmeasured.
 
 Enable it from the admin panel after reading the log line it writes on the first
 message. Until then the `tone` category is uncovered, and the `guards active` line
@@ -125,8 +129,10 @@ The measured gap is between 0.42 and 0.78, and the default sits in it with margi
 on both sides. **This is why the threshold was not inherited from the
 prompt-injection guard**: at 0.85 the hate-speech message is delivered unblocked.
 
-Seven messages are not a corpus. Widen the probe to real traffic before enabling
-the check in production.
+Seven messages are not a corpus. The probe was meant to be widened to real
+traffic before the check was enabled in production; the check was enabled first
+(recorded 2026-10-07), so the widening is now the open calibration issue rather
+than a precondition.
 
 ### `inappropriate` does not block, and that is a decision
 
@@ -256,8 +262,9 @@ it.
 ### Limits of this version
 
 - The threshold is a seven-message starting point, not a calibration on real
-  traffic. It must not be used to enable the guard in production without a new
-  authorised corpus-based calibration.
+  traffic. It was meant to stay out of production until a corpus-based
+  calibration; the guard was enabled in production before that (recorded
+  2026-10-07), and the calibration is an open issue.
 - Only direct offensive content in the user message is covered, not offensive
   material arriving through retrieved documents.
 - The register of the *assistant's* answer is not checked here and no
