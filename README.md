@@ -18,7 +18,7 @@ Each result has a `stage`, `category` and `verdict`. Their definitions are in
 | Guard (`verdict`) | Stage | Default | Purpose |
 | --- | --- | --- | --- |
 | `message_length` | input | on | Blocks messages longer than the configured limit. |
-| `personal_data` | input | on | Detects e-mail addresses, valid phone numbers, IBANs and ordinary checksum-valid Italian fiscal codes. |
+| `personal_data` | input | on | Detects e-mail addresses, valid phone numbers, IBANs and checksum-valid Italian fiscal codes, omocodic ones included. |
 | `prompt_injection` | input | patterns on, classifier off | Detects explicit attempts to alter instructions or expose internal information. |
 | `offensive_input` | input | off | Uses a local multilingual classifier to detect offensive or violent input. |
 | `output_personal_data` | output | on | Replaces an answer containing structured personal data before delivery. |
@@ -156,11 +156,12 @@ model weights to the release package.
 
 ### Built with Llama (when enabled)
 
-`meta-llama/Llama-Prompt-Guard-2-86M` is an optional model for the
+`meta-llama/Llama-Prompt-Guard-2-86M`, the default, and
+`meta-llama/Llama-Prompt-Guard-2-22M` are optional models for the
 prompt-injection classifier. The plugin works without enabling any classifier.
 
 The release ZIP contains no Llama weights or other Llama Materials. If a
-deployment enables this model, its operator downloads and uses Llama Materials
+deployment enables either model, its operator downloads and uses Llama Materials
 under Meta's terms; the following notice applies to that deployment:
 
 > **Llama is licensed under the Llama Community License, Copyright © Meta Platforms, Inc. All Rights Reserved.**

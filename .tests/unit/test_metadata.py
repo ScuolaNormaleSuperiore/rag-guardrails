@@ -73,7 +73,20 @@ class TestLlamaAttribution:
         assert "Built with Llama (when enabled)" in self.readme()
 
     def test_the_readme_makes_the_attribution_conditional_on_enabling_llama(self):
-        assert "If a\ndeployment enables this model" in self.readme()
+        assert "If a\ndeployment enables either model" in self.readme()
+
+    def test_the_readme_names_every_selectable_llama_model(self):
+        # The attribution covers whichever Meta model a deployment picks, so the
+        # README must name all of them; it once named the 86M alone.
+        settings_source = (REPO_ROOT / "settings.py").read_text(encoding="utf-8")
+        llama_models = {
+            line.split('"')[1]
+            for line in settings_source.splitlines()
+            if '= "meta-llama/' in line
+        }
+
+        assert llama_models
+        assert all(model in self.readme() for model in llama_models)
 
     def test_the_readme_carries_the_required_copyright_notice(self):
         # Character for character, including the © and the final full stop: it is a
