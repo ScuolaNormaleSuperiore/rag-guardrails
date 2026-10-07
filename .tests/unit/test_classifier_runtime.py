@@ -555,3 +555,44 @@ class TestModelLabels:
         # Degrading into "not verified" rather than into a failure: a caller that
         # cannot read the labels must not take the turn down over it.
         assert runtime.model_labels(object()) == ()
+
+
+class TestMaxInputTokens:
+    """The token bound every classifier call uses.
+
+    512 is the window of every supported model; a tokenizer can only lower it.
+    """
+
+    @staticmethod
+    def pipeline_with(window):
+        class Tokenizer:
+            model_max_length = window
+
+        class Pipeline:
+            tokenizer = Tokenizer()
+
+        return Pipeline()
+
+    def test_the_bound_is_the_supported_models_window(self):
+        assert runtime.CLASSIFIER_MAX_INPUT_TOKENS == 512
+
+    def test_a_pipeline_without_a_tokenizer_gets_the_bound(self):
+        assert runtime.max_input_tokens(object()) == 512
+
+    @pytest.mark.parametrize(
+        "window, expected",
+        [
+            # The sentinel the Meta tokenizers declare: no window at all.
+            (int(1e30), 512),
+            (1024, 512),
+            (512, 512),
+            (256, 256),
+            (0, 512),
+            (-1, 512),
+            (None, 512),
+            (True, 512),
+            ("256", 512),
+        ],
+    )
+    def test_a_tokenizer_can_only_lower_the_bound(self, window, expected):
+        assert runtime.max_input_tokens(self.pipeline_with(window)) == expected

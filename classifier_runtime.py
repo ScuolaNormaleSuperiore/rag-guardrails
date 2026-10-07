@@ -99,7 +99,20 @@ def release_unused_pipelines(active_cache_keys: set[str]) -> tuple[str, ...]:
 # later request indefinitely; callers turn the timeout into the normal fail-open
 # classifier behaviour.
 CLASSIFIER_LOAD_WAIT_SECONDS = 5.0
-CLASSIFIER_MAX_INPUT_TOKENS = 1024
+
+# The most tokens any classifier is handed for one message. 512 is the window of
+# every supported model: the four BERT-family tone models have absolute position
+# embeddings and raise on anything longer, and the two Meta DeBERTa models, which
+# use relative attention and do not raise, were trained at 512 and slow down
+# steeply past it.
+#
+# It used to be 1024. Measured on 2026-10-07 in the container with the real
+# models: `IMSyPP/hate_speech_multilingual` raised `RuntimeError` at 902 tokens,
+# so a long message passed the tone guard unclassified, and
+# `meta-llama/Llama-Prompt-Guard-2-86M` took 5.6 s at 1024 tokens against about
+# 1.3 s at 512. The cost of the bound is that text past it is not classified:
+# only the deterministic checks see the whole message.
+CLASSIFIER_MAX_INPUT_TOKENS = 512
 _CLASSIFIER_LOAD_LOCKS: dict[str, Any] = {}
 _CLASSIFIER_LOAD_LOCKS_GUARD = threading.Lock()
 
@@ -324,6 +337,25 @@ def get_pipeline(
         return pipeline
     finally:
         load_lock.release()
+
+
+def max_input_tokens(pipeline) -> int:
+    """The token bound for one classification on this pipeline.
+
+    `CLASSIFIER_MAX_INPUT_TOKENS`, lowered to the tokenizer's own window when that
+    is smaller, so a model added later with a shorter window cannot be handed
+    more than it accepts. A tokenizer that declares no window reports a sentinel
+    around `1e30`, which is ignored, as is anything that is not a positive int.
+
+    Passed explicitly as `max_length` because `truncation=True` alone does
+    nothing on the Meta checkpoints: their tokenizers declare that sentinel, and
+    transformers then logs «Default to no truncation».
+    """
+    window = getattr(getattr(pipeline, "tokenizer", None), "model_max_length", None)
+    declared = isinstance(window, int) and not isinstance(window, bool)
+    if declared and 0 < window < CLASSIFIER_MAX_INPUT_TOKENS:
+        return window
+    return CLASSIFIER_MAX_INPUT_TOKENS
 
 
 def warm_pipeline(model_name: str, token: str | bool = False, **pipeline_kwargs) -> bool:

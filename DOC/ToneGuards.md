@@ -49,7 +49,12 @@ and the tone guard has no deterministic half.
 oversight, and it has two reasons:
 
 - it loads a **second model** into memory and adds one inference to every message
-  that reaches it — measured at **79 ms** on CPU on the development instance;
+  that reaches it. The cost grows with length: about 0.11 s at 200 characters,
+  0.36 s at 1,000 and about 0.95 s from 512 tokens onwards, where the input is
+  truncated (median, CPU, development instance, 2026-10-07). The 79 ms measured
+  earlier holds only for very short messages. With the prompt-injection
+  classifier also enabled, the two costs add up, because they run one after
+  the other;
 - its precision on real help-desk traffic has not been measured. There is no
   plan to enable the guard in production and no authorised, anonymised corpus
   for calibration.

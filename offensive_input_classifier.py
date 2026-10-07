@@ -15,16 +15,16 @@ from __future__ import annotations
 
 try:
     from .classifier_runtime import (
-        CLASSIFIER_MAX_INPUT_TOKENS,
         get_pipeline,
+        max_input_tokens,
         model_labels,
         normalize_scores,
         runtime_log,
     )
 except ImportError:  # pragma: no cover - depends on how the module is loaded
     from classifier_runtime import (
-        CLASSIFIER_MAX_INPUT_TOKENS,
         get_pipeline,
+        max_input_tokens,
         model_labels,
         normalize_scores,
         runtime_log,
@@ -194,17 +194,18 @@ def classify_offensive_input(
     pipeline = get_pipeline(model_name, **pipeline_kwargs)
     _warn_on_label_mismatch(model_name, pipeline)
 
-    # truncation=True with no max_length: the bound is the tokenizer's own
-    # `model_max_length`, which is the model's window in tokens. Deliberately not
-    # derived from the message-length limit, which is a count of characters. The
-    # prompt-injection classifier used to do exactly that and no longer does —
-    # the two now agree, which is also what a common runner over both will need.
+    # `truncation=True` with an explicit `max_length` from `max_input_tokens()`:
+    # 512 tokens, or the tokenizer's own window when that is smaller. These
+    # models have absolute position embeddings, so the bound is what keeps them
+    # running at all: until 2026-10-07 it was 1024, and a message past 512 tokens
+    # raised `RuntimeError` and passed unclassified. Deliberately not derived
+    # from the message-length limit, which is a count of characters.
     scores = normalize_scores(
         pipeline(
             text,
             top_k=None,
             truncation=True,
-            max_length=CLASSIFIER_MAX_INPUT_TOKENS,
+            max_length=max_input_tokens(pipeline),
         )
     )
 

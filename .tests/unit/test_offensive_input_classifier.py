@@ -230,15 +230,16 @@ class TestTheSumOfBlockingClasses:
 
 class TestHowThePipelineIsCalled:
     def test_all_scores_are_requested_and_the_input_is_truncated(self):
-        # `top_k=None` is what makes the sum possible at all, and truncation
-        # without `max_length` bounds the input in tokens through the tokenizer's
-        # own limit — deliberately not derived from the character limit of the
-        # length guard.
+        # `top_k=None` is what makes the sum possible at all, and the explicit
+        # 512-token bound is what keeps these absolute-position models running:
+        # with the bound at 1024, a 902-token message raised `RuntimeError` in the
+        # real `IMSyPP/hate_speech_multilingual` and passed the guard unclassified.
+        # Deliberately not derived from the character limit of the length guard.
         pipeline = install_pipeline(MODEL, MEASURED["insult"])
 
         offensive.classify_offensive_input("any", model_name=MODEL)
 
-        assert pipeline.calls == [{"top_k": None, "truncation": True, "max_length": 1024}]
+        assert pipeline.calls == [{"top_k": None, "truncation": True, "max_length": 512}]
 
     @pytest.mark.parametrize("nested", [True, False])
     def test_both_response_shapes_are_understood(self, nested):

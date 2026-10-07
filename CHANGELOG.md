@@ -6,6 +6,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 ## [Unreleased]
+### Security
+- A message longer than 512 tokens could pass the offensive-input guard
+  unclassified. The classifiers were handed up to 1,024 tokens, past the window
+  of the tone models, which raised on the longer input; the guard then failed
+  open. Reachable only with the tone guard enabled and the length limit raised
+  above about 2,000 characters.
+### Changed
+- Classifier input is bounded at 512 tokens, the window of every supported
+  model, lowered further when a model declares a shorter one. On a long
+  message the prompt-injection classifier now costs about 1.4 s instead of up
+  to 5.6 s. Text past the bound is checked only by the deterministic guards.
+
+## [1.0.4] - 2026-10-07
 ### Fixed
 - Cheshire Cat no longer imports the test suite on every activation. The tests
   moved from `tests/` to the hidden `.tests/`, which the core's recursive

@@ -531,8 +531,9 @@ class TestPromptInjectionGuard:
         # one guard silently reconfigured another: `0` — the value that disables
         # the length check — requested no truncation at all, and a limit above
         # the model's window made inference fail, which this guard turns into a
-        # silent fail-open. The bound is now the tokenizer's own, and nothing an
-        # administrator does to the Limits guard may change what this one sees.
+        # silent fail-open. The bound is now the classifier's own, derived from
+        # the model window, and nothing an administrator does to the Limits guard
+        # may change what this one sees.
         cat = make_cat(
             {
                 "detect_prompt_injection_custom": False,

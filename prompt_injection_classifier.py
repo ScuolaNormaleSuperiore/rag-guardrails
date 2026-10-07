@@ -15,9 +15,9 @@ from __future__ import annotations
 try:
     from .classifier_runtime import (
         ClassifierUnavailable,
-        CLASSIFIER_MAX_INPUT_TOKENS,
         classifier_load_error,
         get_pipeline,
+        max_input_tokens,
         model_labels,
         normalize_scores,
         runtime_log,
@@ -25,9 +25,9 @@ try:
 except ImportError:  # pragma: no cover - depends on how the module is loaded
     from classifier_runtime import (
         ClassifierUnavailable,
-        CLASSIFIER_MAX_INPUT_TOKENS,
         classifier_load_error,
         get_pipeline,
+        max_input_tokens,
         model_labels,
         normalize_scores,
         runtime_log,
@@ -175,23 +175,14 @@ def classify_prompt_injection(
     pipeline = get_pipeline(model_name, **pipeline_kwargs)
     _warn_on_label_mismatch(model_name, pipeline)
 
-    # `truncation=True` with no `max_length`, the same as the offensive-input
-    # classifier: the bound asked for is the tokenizer's own `model_max_length`,
-    # which is the model's window and is therefore the right number whichever
-    # model is configured — *when the tokenizer declares one*.
-    #
-    # Neither Meta checkpoint does. Measured on 2026-09-21 in the container:
-    # `model_max_length` is the sentinel `1e30` for both the 86M and the 22M, and
-    # transformers says so out loud — «Asking to truncate to max_length but no
-    # maximum length is provided and the model has no predefined maximum length.
-    # Default to no truncation.» So on the two models this plugin can actually
-    # run offline, nothing is truncated and the whole message reaches inference.
-    #
-    # That does not bring back the coupling removed below — a character limit is
-    # still the wrong unit for a token window — but it does mean the upper bound
-    # on what this classifier is asked to embed comes from the Limits guard's
-    # character limit or from nowhere at all. What that costs when the limit is
-    # disabled is an open issue in `DEV/AGENTS/ISSUES_TODO.md`.
+    # `truncation=True` with an explicit `max_length` from `max_input_tokens()`:
+    # 512 tokens, the model's training window, or the tokenizer's own window when
+    # that is smaller. The explicit value is required, not decoration: both Meta
+    # tokenizers declare no window (`model_max_length` is the sentinel `1e30`), so
+    # `truncation=True` alone truncates nothing — measured on 2026-09-21. The
+    # bound was 1024 until 2026-10-07, which let a long message cost 5.6 s here;
+    # see `CLASSIFIER_MAX_INPUT_TOKENS` in `classifier_runtime.py`. Text past the
+    # bound is not classified; the built-in patterns still see all of it.
     #
     # This used to take a `max_length` the hook filled in from the Limits guard's
     # character limit — two different units, and an accidental coupling between
@@ -208,7 +199,7 @@ def classify_prompt_injection(
     # correctly, but the guard then reported itself as *unavailable* — a load or
     # token problem — when what had actually changed was the library version.
     scores = normalize_scores(
-        pipeline(text, truncation=True, max_length=CLASSIFIER_MAX_INPUT_TOKENS)
+        pipeline(text, truncation=True, max_length=max_input_tokens(pipeline))
     )
     if not scores:
         return {"triggered": False, "label": None, "score": 0.0}

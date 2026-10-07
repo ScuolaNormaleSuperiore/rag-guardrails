@@ -89,6 +89,10 @@ allowed contacts list.
   slow; concurrent requests wait up to five seconds and then fail open. Loaded
   pipelines are released when no longer selected; failed model loads remain
   cached until the plugin reloads.
+- **Classifier input:** each classifier reads at most the first 512 tokens of a
+  message, about 2,000 characters. Text beyond that is checked only by the
+  deterministic guards. The default 1,000-character length limit keeps every
+  message within the bound.
 - **Data:** the Hugging Face token is stored in plain text in `settings.json`;
   protect that file and exclude it from support bundles. Cheshire Cat AI logs
   incoming messages before plugin hooks run, so restrict log access and set a

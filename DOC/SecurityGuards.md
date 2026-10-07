@@ -38,8 +38,14 @@ The guard uses two independent detectors.
 - implemented through `transformers.pipeline("text-classification", ...)`
 - runs only if the custom detector does not block first
 - uses the configured model and threshold
-- truncates classifier input to 1,024 tokens independently of the message-length
-  guard, preventing unbounded inference when that character limit is disabled
+- truncates classifier input to 512 tokens — about 2,000 characters of Italian —
+  independently of the message-length guard, so inference stays bounded when
+  that character limit is raised or disabled. 512 is the window the models were
+  trained on; the bound was 1,024 until 2026-10-07, when a 1,024-token message
+  measured 5.6 s here. Text past the bound is not classified: on a long message
+  only the built-in patterns read the whole text
+- costs about 0.56 s for a 1,000-character message and levels off at about
+  1.4 s from 512 tokens onwards (median, CPU, development instance, 2026-10-07)
 
 The combined logic is `OR`: one positive detector is enough to block.
 
