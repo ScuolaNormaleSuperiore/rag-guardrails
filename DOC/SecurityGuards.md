@@ -178,6 +178,26 @@ If model loading, dependency import, or inference fails:
 
 This keeps the chatbot available even when the classifier runtime is not.
 
+The warning depends on which of the two it was, and the difference matters to
+whoever reads it:
+
+- **The model cannot load** — a failed load, which the runtime remembers until
+  the plugin reloads, or a load this request gave up waiting for. The line says
+  `classifier unavailable (…)`, names what still covers the turn, and is written
+  once.
+- **A loaded model failed on one message.** The model keeps classifying the next
+  one, so the line says only that this message was let through unclassified:
+
+  ```text
+  [rag-guardrails] prompt-injection classifier failed on one message (RuntimeError, model meta-llama/Llama-Prompt-Guard-2-86M); that message was let through unclassified and the classifier stays active. Reported once per model and error type
+  ```
+
+  It names the exception class and never its text, which comes from a third-party
+  library and may quote the message. It is written once per model and error type.
+  Until 2026-10-07 this case was announced as `classifier unavailable … Not
+  repeated until the plugin reloads`, which was false, and with the exception text
+  included.
+
 #### A turn can also give up waiting for a load
 
 There is a fourth way in, and it is the only one that leaves nothing broken

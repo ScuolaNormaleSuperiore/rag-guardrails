@@ -56,10 +56,33 @@ def reset_classifier_caches():
     runtime_module._CLASSIFIER_PIPELINES.clear()
     runtime_module._FAILED_CLASSIFIER_MODELS.clear()
     guards._WARMED_CLASSIFIER_CONFIGURATIONS.clear()
+    guards._ANNOUNCED_INFERENCE_FAILURES.clear()
     yield
     runtime_module._CLASSIFIER_PIPELINES.clear()
     runtime_module._FAILED_CLASSIFIER_MODELS.clear()
     guards._WARMED_CLASSIFIER_CONFIGURATIONS.clear()
+    guards._ANNOUNCED_INFERENCE_FAILURES.clear()
+
+
+INJECTION_MODEL = "meta-llama/Llama-Prompt-Guard-2-86M"
+TONE_MODEL = "IMSyPP/hate_speech_multilingual"
+
+
+def failed_load(model_name, message, error_type=OSError):
+    """A classifier stub that fails the way a real failed load does.
+
+    `get_pipeline` records the failure in the runtime's negative cache before
+    re-raising it, and that record is how the adapters tell a model that cannot
+    load from an error on one message. A stub that only raised would be
+    announced as the second kind.
+    """
+    def explode(*args, **kwargs):
+        runtime_module._FAILED_CLASSIFIER_MODELS[
+            runtime_module.classifier_cache_key(model_name)
+        ] = message
+        raise error_type(message)
+
+    return explode
 
 # The @hook decorator replaces the function with a CatHook object, so the
 # callable under test is reached through `.function`.
@@ -1224,10 +1247,11 @@ class TestClassifierUnavailable:
         guards._ANNOUNCED_GUARD_SUMMARY = None
 
     def broken_classifier(self, monkeypatch):
-        def explode(*args, **kwargs):
-            raise OSError("401 Client Error: gated repo")
-
-        monkeypatch.setattr(guards, "classify_prompt_injection", explode)
+        monkeypatch.setattr(
+            guards,
+            "classify_prompt_injection",
+            failed_load(INJECTION_MODEL, "401 Client Error: gated repo"),
+        )
 
     def test_the_failure_is_reported_once_not_per_message(self, monkeypatch):
         cat = make_cat(self.ENABLED)
@@ -1291,7 +1315,7 @@ class TestClassifierUnavailable:
         errors = iter(["401 gated repo", "401 gated repo", "connection timed out"])
 
         def explode(*args, **kwargs):
-            raise OSError(next(errors))
+            failed_load(INJECTION_MODEL, next(errors))()
 
         monkeypatch.setattr(guards, "classify_prompt_injection", explode)
 
@@ -2031,8 +2055,7 @@ class TestOffensiveInputGuard:
         # This guard has no deterministic half to fall back on, so a model that
         # does not load leaves the category with nothing — and the `guards active`
         # line, built from the settings, claimed a classifier that never runs.
-        def explode(*args, **kwargs):
-            raise RuntimeError("model unavailable")
+        explode = failed_load(TONE_MODEL, "model unavailable", RuntimeError)
 
         warnings = []
         monkeypatch.setattr(guards, "classify_offensive_input", explode)
@@ -2046,8 +2069,7 @@ class TestOffensiveInputGuard:
         )
 
     def test_the_failure_is_reported_once_not_once_per_message(self, monkeypatch):
-        def explode(*args, **kwargs):
-            raise RuntimeError("model unavailable")
+        explode = failed_load(TONE_MODEL, "model unavailable", RuntimeError)
 
         warnings = []
         monkeypatch.setattr(guards, "classify_offensive_input", explode)
@@ -2169,3 +2191,150 @@ class TestOffensiveInputSettings:
         assert settings.offensive_input_classifier_threshold == (
             shipped.offensive_input_classifier_threshold
         )
+
+
+class TestInferenceFailure:
+    """An error on one message is not an unavailable classifier.
+
+    Regression for the line written when a loaded model raised on one message:
+    `classifier unavailable … Not repeated until the plugin reloads`, which was
+    false — the next message was classified normally — and, keyed by the error
+    text, repeated for every distinct message length.
+    """
+
+    CASES = [
+        pytest.param(
+            {
+                "detect_prompt_injection_custom": False,
+                "detect_prompt_injection_classifier": True,
+            },
+            "classify_prompt_injection",
+            "prompt-injection",
+            {"triggered": False, "label": "BENIGN", "score": 0.01},
+            "injection_classifier",
+            id="prompt-injection",
+        ),
+        pytest.param(
+            {"detect_offensive_input_classifier": True},
+            "classify_offensive_input",
+            "offensive-input",
+            {"triggered": False, "label": None, "score": 0.01},
+            "offensive_input",
+            id="offensive-input",
+        ),
+    ]
+
+    @pytest.fixture(autouse=True)
+    def forget_previous_announcements(self):
+        guards._ANNOUNCED_CLASSIFIER_FAILURE = None
+        guards._ANNOUNCED_OFFENSIVE_CLASSIFIER_FAILURE = None
+        yield
+        guards._ANNOUNCED_CLASSIFIER_FAILURE = None
+        guards._ANNOUNCED_OFFENSIVE_CLASSIFIER_FAILURE = None
+
+    @staticmethod
+    def raising(*errors):
+        pending = list(errors)
+
+        def classify(*args, **kwargs):
+            raise pending.pop(0)
+
+        return classify
+
+    @pytest.mark.parametrize("settings, target, guard, ok, check", CASES)
+    def test_it_is_reported_as_one_message_not_as_an_outage(
+        self, monkeypatch, settings, target, guard, ok, check
+    ):
+        warnings = []
+        monkeypatch.setattr(guards.log, "warning", warnings.append)
+        monkeypatch.setattr(guards, target, self.raising(RuntimeError("tensor (902)")))
+
+        result = send(make_cat(settings), "a long message")
+
+        assert result == {}
+        line = next(w for w in warnings if "failed on one message" in w)
+        assert f"{guard} classifier" in line
+        assert "RuntimeError" in line
+        assert "stays active" in line
+        assert not any("unavailable" in w for w in warnings)
+
+    @pytest.mark.parametrize("settings, target, guard, ok, check", CASES)
+    def test_the_exception_text_never_reaches_the_log(
+        self, monkeypatch, settings, target, guard, ok, check
+    ):
+        warnings = []
+        monkeypatch.setattr(guards.log, "warning", warnings.append)
+        monkeypatch.setattr(
+            guards, target, self.raising(ValueError("the user wrote: mario.rossi"))
+        )
+
+        send(make_cat(settings), "a message")
+
+        assert warnings
+        assert not any("mario.rossi" in w for w in warnings)
+
+    @pytest.mark.parametrize("settings, target, guard, ok, check", CASES)
+    def test_it_is_reported_once_per_error_type_whatever_the_text(
+        self, monkeypatch, settings, target, guard, ok, check
+    ):
+        warnings = []
+        monkeypatch.setattr(guards.log, "warning", warnings.append)
+        monkeypatch.setattr(
+            guards,
+            target,
+            self.raising(
+                RuntimeError("tensor (902)"),
+                RuntimeError("tensor (1024)"),
+                RuntimeError("tensor (733)"),
+                ValueError("something else"),
+            ),
+        )
+
+        cat = make_cat(settings)
+        for _ in range(4):
+            send(cat, "a message")
+
+        failed = [w for w in warnings if "failed on one message" in w]
+        assert len(failed) == 2
+        assert "RuntimeError" in failed[0] and "ValueError" in failed[1]
+
+    @pytest.mark.parametrize("settings, target, guard, ok, check", CASES)
+    def test_the_next_message_is_classified_again(
+        self, monkeypatch, settings, target, guard, ok, check
+    ):
+        calls = []
+
+        def classify(*args, **kwargs):
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("tensor (902)")
+            return ok
+
+        infos = []
+        monkeypatch.setattr(guards.log, "info", infos.append)
+        monkeypatch.setattr(guards.log, "warning", lambda message: None)
+        monkeypatch.setattr(guards, target, classify)
+
+        cat = make_cat(settings)
+        send(cat, "a long message")
+        send(cat, "a short message")
+
+        allowed = [line for line in infos if "input allowed" in line]
+        assert len(allowed) == 2
+        # The failed message is not counted as covered, the next one is.
+        assert check not in allowed[0]
+        assert check in allowed[1]
+
+    @pytest.mark.parametrize("settings, target, guard, ok, check", CASES)
+    def test_a_load_failure_is_still_announced_as_unavailable(
+        self, monkeypatch, settings, target, guard, ok, check
+    ):
+        model = INJECTION_MODEL if guard == "prompt-injection" else TONE_MODEL
+        warnings = []
+        monkeypatch.setattr(guards.log, "warning", warnings.append)
+        monkeypatch.setattr(guards, target, failed_load(model, "401 gated repo"))
+
+        send(make_cat(settings), "a message")
+
+        assert any(f"{guard} classifier unavailable" in w for w in warnings)
+        assert not any("failed on one message" in w for w in warnings)

@@ -226,6 +226,13 @@ says exactly that:
 [rag-guardrails] offensive-input classifier unavailable (IMSyPP/hate_speech_multilingual: …), continuing without blocking; no guard covers: tone — this check has no deterministic fallback. Not repeated until the plugin reloads
 ```
 
+That line is for a model that cannot load. A loaded model that fails on one
+message writes a different one — `offensive-input classifier failed on one
+message (…); that message was let through unclassified and the classifier stays
+active` — once per model and error type, naming the exception class but never its
+text. The next message is classified normally. See `DOC/SecurityGuards.md`,
+*Error policy*, for the reasoning, which is the same for both classifiers.
+
 A failed load is remembered and never retried until the plugin reloads, which is
 what keeps a broken configuration from costing a network round trip inside
 `fast_reply` on every message. Selecting a *different* model or device from the

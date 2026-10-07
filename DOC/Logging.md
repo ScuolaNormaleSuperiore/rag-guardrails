@@ -202,6 +202,7 @@ mechanism is:
 | --- | --- | --- |
 | `prompt-injection classifier unavailable (…), continuing without blocking; …` | `WARNING` | `DOC/SecurityGuards.md`, *Error policy* |
 | `offensive-input classifier unavailable (…), continuing without blocking; no guard covers: tone …` | `WARNING` | `DOC/ToneGuards.md`, *Error policy* |
+| `prompt-injection classifier failed on one message (…)` / `offensive-input classifier failed on one message (…); that message was let through unclassified and the classifier stays active` | `WARNING` | `DOC/SecurityGuards.md`, *Error policy* |
 | `prompt-injection classifier model … returns labels …, not the expected blocking label …` | `WARNING` | `DOC/ClassifierLabels.md` |
 | `prompt-injection classifier model … returned the label …, which is not in its mapping (…); the message was let through unclassified` | `WARNING` | `DOC/ClassifierLabels.md` |
 | `offensive-input classifier model … returns labels …, none of which maps to a blocking class …` | `WARNING` | `DOC/ClassifierLabels.md` |
@@ -217,7 +218,10 @@ until the plugin reloads, so repeating them per message would bury the log exact
 when it is needed. The unmapped-label warning is deduplicated too, but per
 `(model, label)` pair rather than per model: unlike the others it reports
 something the model said, and a second unknown label is a second piece of
-information that the first must not hide. The model-loading lines are not
+information that the first must not hide. The inference-failure warning is
+deduplicated per `(model, exception class)` and never by the exception text: the
+text can change with every message — a token count, for instance — and may quote
+it. The model-loading lines are not
 deduplicated and do not need to be, because loading happens once per
 model-and-device pair anyway — except `classifier pipeline cache hit`, which is
 written on **every** message that reaches a classifier and is at `INFO`

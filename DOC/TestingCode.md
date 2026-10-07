@@ -129,6 +129,7 @@ a live session conclusive, and it is the reference for every manual check below.
 | Everything passed, normal answer | `input allowed` **and** `output allowed`, each naming the checks that covered its stage | `INFO` |
 | The answer was delivered with the output stage switched off | `output allowed, stage='output', checks=none` | `INFO` |
 | A classifier could not run, message let through | `classifier unavailable (…), continuing without blocking` — **once**, not per message | `WARNING` |
+| A loaded classifier failed on one message, which was let through | `classifier failed on one message (…); … the classifier stays active` — once per model and error type | `WARNING` |
 | Another plugin refused it | **nothing** from this plugin: its checks passed and it returned the reply it received untouched | — |
 | The configuration changed | `guards active: …`, once per change, `WARNING` instead of `INFO` when a stage that ships enabled has been switched off | `INFO`/`WARNING` |
 

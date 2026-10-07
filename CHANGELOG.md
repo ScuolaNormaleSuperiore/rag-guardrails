@@ -12,6 +12,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   of the tone models, which raised on the longer input; the guard then failed
   open. Reachable only with the tone guard enabled and the length limit raised
   above about 2,000 characters.
+### Fixed
+- An error raised by a loaded classifier on one message was announced as
+  `classifier unavailable … Not repeated until the plugin reloads`, which was
+  false: the next message was classified normally. It now has its own warning,
+  written once per model and error type. The old line also included the
+  exception text, which can quote the message; the new one names only the
+  exception class.
 ### Changed
 - Classifier input is bounded at 512 tokens, the window of every supported
   model, lowered further when a model declares a shorter one. On a long

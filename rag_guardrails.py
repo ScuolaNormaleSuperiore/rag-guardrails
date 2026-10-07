@@ -76,7 +76,9 @@ try:
         stage_of,
     )
     from .classifier_runtime import (
+        ClassifierUnavailable,
         classifier_cache_key,
+        classifier_load_error,
         redact_secrets,
         release_unused_pipelines,
         warm_pipeline,
@@ -108,7 +110,9 @@ except ImportError:  # pragma: no cover - depends on how the module is loaded
         stage_of,
     )
     from classifier_runtime import (
+        ClassifierUnavailable,
         classifier_cache_key,
+        classifier_load_error,
         redact_secrets,
         release_unused_pipelines,
         warm_pipeline,
@@ -243,6 +247,14 @@ _ANNOUNCED_CLASSIFIER_FAILURE: str | None = None
 # injection still has its built-in patterns to fall back on, the tone guard has
 # nothing else at all.
 _ANNOUNCED_OFFENSIVE_CLASSIFIER_FAILURE: str | None = None
+
+# Inference errors already reported, as `(model, exception class)` pairs. Not the
+# two announcements above: those report a model that cannot load, a state that
+# lasts until the plugin reloads. An inference error belongs to one message, and
+# the model keeps classifying the next one. Keyed by the class and never by the
+# text, because the text can vary per message — a `RuntimeError` from a model
+# window quotes the token count — and could quote what the user wrote.
+_ANNOUNCED_INFERENCE_FAILURES: set[tuple[str, str]] = set()
 
 # The settings degradation already reported. Unlike the two classifier failures
 # above, this state repairs itself without the plugin reloading — somebody fixes
@@ -715,6 +727,42 @@ def announce_classifier_failure(
     )
 
 
+def is_load_failure(error: Exception, model_name: str, device: int) -> bool:
+    """Whether a classifier error means the model is not available at all.
+
+    `get_pipeline` records a failed load in the runtime's negative cache before
+    re-raising it, and raises `ClassifierUnavailable` for a load that failed
+    earlier or is still running elsewhere. Anything else was raised while a
+    loaded model examined one message.
+    """
+    return (
+        isinstance(error, ClassifierUnavailable)
+        or classifier_load_error(model_name, device) is not None
+    )
+
+
+def announce_inference_failure(guard: str, model_name: str, error: Exception) -> None:
+    """Report one message the classifier could not examine, once per error type.
+
+    The message was let through unclassified, as every classifier failure is,
+    but the model is still loaded and the next message is classified normally,
+    so this must not read like the unavailable-until-reload announcements. Only
+    the exception class is written: its text is third-party and may quote the
+    message.
+    """
+    key = (model_name, type(error).__name__)
+    if key in _ANNOUNCED_INFERENCE_FAILURES:
+        return
+    _ANNOUNCED_INFERENCE_FAILURES.add(key)
+
+    log.warning(
+        f"[rag-guardrails] {guard} classifier failed on one message "
+        f"({type(error).__name__}, model {model_name}); that message was let "
+        "through unclassified and the classifier stays active. Reported once per "
+        "model and error type"
+    )
+
+
 def detect_prompt_injection_with_classifier(
     text: str, settings: RagGuardrailsSettings
 ) -> ClassifierOutcome:
@@ -736,12 +784,16 @@ def detect_prompt_injection_with_classifier(
             classifier_kwargs["device"] = settings.classifier_device.index
         result = classify_prompt_injection(text, **classifier_kwargs)
     except Exception as error:
-        # Every reason this can fail lands here and means the same thing for the
-        # turn: the message was not examined. A model that failed to load
-        # earlier, a load still running that this request gave up waiting for, a
-        # response shape the decision rule cannot read — the guard stays open and
-        # says so, rather than counting itself as coverage.
-        announce_classifier_failure(error, settings)
+        # Every reason this can fail means the same thing for the turn: the
+        # message was not examined, and the guard stays open rather than counting
+        # itself as coverage. What differs is what the log may claim. A model
+        # that failed to load, or a load still running that this request gave up
+        # waiting for, is announced as unavailable; an error raised while a
+        # loaded model examined this message is announced as that message alone.
+        if is_load_failure(error, model_name, settings.classifier_device.index):
+            announce_classifier_failure(error, settings)
+        else:
+            announce_inference_failure("prompt-injection", model_name, error)
         return DID_NOT_RUN
 
     elapsed_ms = (time.perf_counter() - started) * 1000
@@ -819,7 +871,11 @@ def detect_offensive_input(
             classifier_kwargs["device"] = settings.classifier_device.index
         result = classify_offensive_input(text, **classifier_kwargs)
     except Exception as error:
-        announce_offensive_classifier_failure(error, settings)
+        # The same split as the prompt-injection adapter above.
+        if is_load_failure(error, model_name, settings.classifier_device.index):
+            announce_offensive_classifier_failure(error, settings)
+        else:
+            announce_inference_failure("offensive-input", model_name, error)
         return DID_NOT_RUN
 
     elapsed_ms = (time.perf_counter() - started) * 1000
