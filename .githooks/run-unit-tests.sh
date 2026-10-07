@@ -60,7 +60,7 @@ fi
 if ! "$python_bin" -m pytest "$test_target"; then
 	echo >&2
 	echo "Commit blocked: unit tests failed." >&2
-	echo "Reproduce with: python run-tests.py --unit" >&2
+	echo "Reproduce with: python .tests/run-tests.py --unit" >&2
 	exit 1
 fi
 

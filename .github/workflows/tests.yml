@@ -2,7 +2,7 @@ name: tests
 
 # Only the unit tests run here. The integration tests need a running Cheshire
 # Cat container, which this workflow deliberately does not build: see
-# DOC/TestingCode.md. Everything goes through run-tests.py, which is the single
+# DOC/TestingCode.md. Everything goes through .tests/run-tests.py, which is the single
 # source of truth for test execution and exits with pytest's own code.
 
 on:
@@ -38,4 +38,4 @@ jobs:
           python -m pip install pytest phonenumberslite
 
       - name: Run unit tests
-        run: python run-tests.py --unit
+        run: python .tests/run-tests.py --unit

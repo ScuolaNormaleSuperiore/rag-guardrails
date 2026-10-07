@@ -113,15 +113,32 @@ Pure decision logic lives in `checks.py` and imports nothing from `cat`.
 `rag_guardrails.py` contains the hook adapters, `classifier_runtime.py` manages
 classifier loading and caching, and `settings.py` defines the admin settings.
 
+The test runner lives in `.tests/` and the packaging script in `.tools/`.
+Cheshire Cat imports every `.py` in the plugin folder except those in hidden
+folders, so development code placed there never runs inside the Cat. Both
+scripts work from any directory.
+
+### Tests
+
 ```bash
-python run-tests.py --unit          # pure logic, local interpreter
-python run-tests.py --integration   # hook adapters, Cheshire Cat container
-python run-tests.py                 # both
-python run-tests.py --detailed      # both, listing every test name
-python package-plugin.py     # build the release zip
+python .tests/run-tests.py                 # unit + integration, in the Cheshire Cat container
+python .tests/run-tests.py --unit          # (-u) unit only, local interpreter, no Docker
+python .tests/run-tests.py --integration   # (-i) integration only, in the container
+python .tests/run-tests.py --detailed      # (-d) list every test name; combines with the others
 ```
 
-When a new file must ship with the plugin, add it to `package-plugin.py`.
+`--unit` and `--integration` are mutually exclusive. The integration tests need
+the Cheshire Cat container running; the unit tests need only `pytest` and
+`phonenumberslite`.
+
+### Release package
+
+```bash
+python .tools/package-plugin.py            # build the release ZIP under dist/
+```
+
+When a new file must ship with the plugin, add it to `INCLUDED_FILES` in
+`.tools/package-plugin.py`.
 
 ## License and model terms
 

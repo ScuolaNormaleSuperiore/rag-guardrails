@@ -7,6 +7,10 @@ directory or attached to a release.
 By default this excludes development-only material such as `DEV/`, `DOC/`,
 `.github/`, tests, local caches, and runner scripts. Public documentation should
 be shipped only when it is explicitly meant to be part of the release package.
+
+It lives in `.tools/`, not in the plugin root, because Cheshire Cat imports every
+`.py` it finds in the plugin folder except those in hidden folders. Run it as
+`python .tools/package-plugin.py`; it works from any directory.
 """
 
 from __future__ import annotations
@@ -17,7 +21,7 @@ from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 
-REPO_ROOT = Path(__file__).resolve().parent
+REPO_ROOT = Path(__file__).resolve().parent.parent
 DIST_DIR = REPO_ROOT / "dist"
 PLUGIN_METADATA_FILE = REPO_ROOT / "plugin.json"
 

@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-RUNNER_PATH = REPO_ROOT / "run-tests.py"
+RUNNER_PATH = REPO_ROOT / ".tests" / "run-tests.py"
 
 
 def load_runner():

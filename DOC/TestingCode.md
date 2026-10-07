@@ -32,11 +32,11 @@ dedicated regression coverage.
 
 `.tests/integration/` needs the core only because the module under test imports `cat.log` and `cat.mad_hatter.decorators` at import time, not because a Cat must be running. Those tests never contact a live instance: the container is used as an interpreter, not as a server. Automated tests against a running instance do not exist yet; see `What is not automated` below.
 
-**Why the folder is hidden.** The Cat imports every `.py` it finds in the plugin folder, recursively — `glob("**/*.py", recursive=True)` in `cat/mad_hatter/plugin.py`, with no exclusions — except what sits in a hidden folder, which `glob` does not enter. The tests used to live in a visible `tests/`, so the Cat imported all of them on every activation, pytest included. Six of them put the plugin folder first on `sys.path`, which inside the Cat process made a bare `import settings` written by *another* plugin resolve to this plugin's `settings.py`: the mechanism that once broke a neighbouring plugin on every activation. Since 2026-10-07 they live in `.tests/`, and the Cat imports eight files: the six runtime modules and the two runner scripts, which run nothing on import.
+**Why the folder is hidden.** The Cat imports every `.py` it finds in the plugin folder, recursively — `glob("**/*.py", recursive=True)` in `cat/mad_hatter/plugin.py`, with no exclusions — except what sits in a hidden folder, which `glob` does not enter. The tests used to live in a visible `tests/`, so the Cat imported all of them on every activation, pytest included. Six of them put the plugin folder first on `sys.path`, which inside the Cat process made a bare `import settings` written by *another* plugin resolve to this plugin's `settings.py`: the mechanism that once broke a neighbouring plugin on every activation. Since 2026-10-07 they live in `.tests/`, together with the test runner, and the packaging script lives in `.tools/`. The Cat imports exactly six files: the runtime modules.
 
-`.tests/unit/test_repository_layout.py` keeps it so. It starts from the files that register something with the Cat — hooks, plugin overrides, tools, forms, endpoints — follows their imports, and fails on any `.py` the Cat would import that no plugin code needs, with `run-tests.py` and `package-plugin.py` as the only listed exceptions. It also checks that `pytest.ini` points at `.tests`, that `pytest .` still collects the hidden folder, and that the pre-commit hook fails rather than passes when the folder is missing. It replaces `test_importability.py`, which only kept the imports from raising and left the cause in place.
+`.tests/unit/test_repository_layout.py` keeps it so. It starts from the files that register something with the Cat — hooks, plugin overrides, tools, forms, endpoints — follows their imports, and fails on any `.py` the Cat would import that no plugin code needs, with no list of exceptions. It also checks that `run-tests.py` and `package-plugin.py` stay in their hidden folders, that `pytest.ini` points at `.tests`, that `pytest .` still collects the hidden folder, and that the pre-commit hook fails rather than passes when the folder is missing. It replaces `test_importability.py`, which only kept the imports from raising and left the cause in place.
 
-Two things to know before adding files. A new test goes under `.tests/`, never in a new visible folder. And pytest skips folders that start with a dot by default: `pytest.ini` therefore overrides `norecursedirs` without the `.*` pattern, and without that override `pytest .` collects nothing. Some tools, ripgrep among them, also skip hidden folders unless asked. `pytest.ini` and the runner scripts are deliberately not Python files, or they would be imported too.
+Two things to know before adding files. A new test goes under `.tests/` and a new development script under `.tools/`, never in a visible folder. And pytest skips folders that start with a dot by default: `pytest.ini` therefore overrides `norecursedirs` without the `.*` pattern, and without that override `pytest .` collects nothing. Some tools, ripgrep among them, also skip hidden folders unless asked. `pytest.ini` is deliberately not a Python file, or it would be imported too.
 
 The `@hook` decorator turns functions into non-callable `CatHook` objects. Tests reach the real function through `.function`.
 
@@ -64,20 +64,22 @@ Add `--build` only after changing the image or the core dependencies: it is not 
 
 ## Running the tests
 
-The single source of truth is `run-tests.py`. It returns pytest's own exit code.
+The single source of truth is `.tests/run-tests.py`. It returns pytest's own exit code, and works from any directory.
 
 Direct Python entrypoint:
 
 ```bash
-python run-tests.py --unit          # pure logic, local interpreter
-python run-tests.py --integration   # hook adapters, Cheshire Cat container
-python run-tests.py                 # both
-python run-tests.py --detailed      # both, listing every test name
+python .tests/run-tests.py                 # unit + integration, in the Cheshire Cat container
+python .tests/run-tests.py --unit          # (-u) pure logic, local interpreter, no Docker
+python .tests/run-tests.py --integration   # (-i) hook adapters, in the container
+python .tests/run-tests.py --detailed      # (-d) list every test name; combines with the others
 ```
+
+`--unit` and `--integration` are mutually exclusive; `--detailed` combines with either, or with neither.
 
 Because the exit code is pytest's own, the script can be reused from a git hook or from CI. If a prerequisite is missing, no interpreter with `pytest`, container not running, `compose.yml` not where expected, it says which command fixes it instead of failing obscurely.
 
-**CI runs the unit tests only.** `.github/workflows/tests.yml` calls `python run-tests.py --unit` on every push to `main` and on every pull request, against Python 3.10, 3.11 and 3.12. It builds no container on purpose: `.tests/integration` stays a runner job before pushing, and a workflow that built the image would pay for the whole dependency stack, `torch` included, on every commit.
+**CI runs the unit tests only.** `.github/workflows/tests.yml` calls `python .tests/run-tests.py --unit` on every push to `main` and on every pull request, against Python 3.10, 3.11 and 3.12. It builds no container on purpose: `.tests/integration` stays a runner job before pushing, and a workflow that built the image would pay for the whole dependency stack, `torch` included, on every commit.
 
 The `pre-commit` hook runs `.tests/unit` too, and nothing else: a commit must not depend on Docker being up, or the hook would either block legitimate commits or skip in silence. `.tests/integration` is for the runners, before pushing.
 
@@ -102,7 +104,7 @@ In the container:
 docker compose exec -w /app/cat/plugins/rag-guardrails cheshire-cat-core python -m pytest
 ```
 
-From Git Bash on Windows that same direct `docker compose exec -w ...` command fails with `Cwd must be an absolute path`, because the shell rewrites the `-w` path. `run-tests.py` handles that case automatically.
+From Git Bash on Windows that same direct `docker compose exec -w ...` command fails with `Cwd must be an absolute path`, because the shell rewrites the `-w` path. `.tests/run-tests.py` handles that case automatically.
 
 No `PYTHONPATH` is needed: `pytest.ini` declares `pythonpath = . /app`, where `.` makes the plugin modules importable and `/app` makes the core importable inside the container. A path that does not exist is ignored, so the same file works on a developer machine. Without that second entry `.tests/integration/` is skipped rather than failed, which reads as a success.
 

@@ -2,7 +2,8 @@
 
 The Cat imports every `.py` under the plugin folder (`glob("**/*.py", recursive=True)` in
 `cat/mad_hatter/plugin.py`, no exclusions) except what sits in a hidden folder, which
-`glob` does not enter. That is why the tests live in `.tests/`.
+`glob` does not enter. That is why the tests and the test runner live in `.tests/`
+and the packaging script in `.tools/`.
 
 They used to live in `tests/`, and the Cat imported all of them on every activation. Six
 of them put the plugin folder first on `sys.path`, so inside the Cat process a bare
@@ -14,7 +15,9 @@ keeps it removed.
 A class check alone cannot tell needed files from useless ones: `checks.py` and the
 classifier modules define no hook, tool, form, endpoint or override, and are needed all
 the same. What can: start from the files that do define something the Cat registers and
-follow the imports. Whatever is not reached is not part of the plugin.
+follow the imports. Whatever is not reached is not part of the plugin, and there is
+no list of exceptions: `run-tests.py` and `package-plugin.py` used to be tolerated in
+the root as inert scripts, and were moved out instead on 2026-10-07.
 """
 
 import ast
@@ -32,9 +35,12 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# Loaded by the Cat although it does not need them, and harmless: nothing runs when they
-# are imported (checked below). Listing a file here is a decision, not a default.
-DEVELOPMENT_SCRIPTS = frozenset({"run-tests.py", "package-plugin.py"})
+# Where the development scripts live. Both folders are hidden, so the Cat never imports
+# them; moving a script back to the root makes the first test below fail.
+DEVELOPMENT_SCRIPTS = {
+    "run-tests.py": ".tests",
+    "package-plugin.py": ".tools",
+}
 
 # What marks a module as something the Cat registers: the decorators of
 # `cat.mad_hatter.decorators` and the `CatForm` base class.
@@ -106,13 +112,22 @@ def files_outside_the_plugin(root) -> list[str]:
 # ------------------------------------------------------------------ this repository
 
 
-def test_the_cat_imports_nothing_that_the_plugin_does_not_need_except_the_known_scripts():
-    extra = [name for name in files_outside_the_plugin(REPO_ROOT) if name not in DEVELOPMENT_SCRIPTS]
+def test_the_cat_imports_nothing_that_the_plugin_does_not_need():
+    extra = files_outside_the_plugin(REPO_ROOT)
 
     assert extra == [], (
-        f"the Cat would import {extra}, which no plugin code uses. Move test or tool files "
-        "into a hidden folder (.tests/, .tools/), or, for an inert script, add it to "
-        "DEVELOPMENT_SCRIPTS on purpose."
+        f"the Cat would import {extra}, which no plugin code uses. Move test files into "
+        ".tests/ and tool scripts into .tools/: hidden folders are the only ones the "
+        "Cat does not import."
+    )
+
+
+@pytest.mark.parametrize("script, folder", sorted(DEVELOPMENT_SCRIPTS.items()))
+def test_the_development_scripts_live_in_hidden_folders(script, folder):
+    assert folder.startswith(".")
+    assert (REPO_ROOT / folder / script).is_file(), f"{script} is not in {folder}/"
+    assert not (REPO_ROOT / script).exists(), (
+        f"{script} is back in the plugin root, where the Cat imports it on every activation"
     )
 
 
@@ -128,10 +143,12 @@ def test_no_test_module_is_among_the_files_the_cat_imports():
 
 
 def test_the_runtime_files_the_cat_loads_are_exactly_the_python_files_of_the_zip():
-    spec = importlib.util.spec_from_file_location("package_plugin", REPO_ROOT / "package-plugin.py")
+    spec = importlib.util.spec_from_file_location(
+        "package_plugin", REPO_ROOT / ".tools" / "package-plugin.py"
+    )
     package = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(package)
-    loaded = set(files_the_cat_imports(REPO_ROOT)) - DEVELOPMENT_SCRIPTS
+    loaded = set(files_the_cat_imports(REPO_ROOT))
 
     assert loaded == {name for name in package.INCLUDED_FILES if name.endswith(".py")}
 
@@ -143,23 +160,6 @@ def test_the_plugin_entry_points_are_found_by_their_decorators():
     }
 
     assert entries == {"rag_guardrails.py", "settings.py"}
-
-
-@pytest.mark.parametrize("script", sorted(DEVELOPMENT_SCRIPTS))
-def test_the_development_scripts_do_nothing_when_the_cat_imports_them(script):
-    tree = ast.parse((REPO_ROOT / script).read_text(encoding="utf-8"))
-    effects = []
-    for node in tree.body:
-        if isinstance(node, (ast.Import, ast.ImportFrom, ast.FunctionDef, ast.ClassDef,
-                             ast.Assign, ast.AnnAssign)):
-            continue
-        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
-            continue  # the docstring
-        if isinstance(node, ast.If) and ast.unparse(node.test) == "__name__ == '__main__'":
-            continue
-        effects.append(ast.unparse(node)[:60])
-
-    assert effects == []
 
 
 # ------------------------------------------------------------------ the check itself

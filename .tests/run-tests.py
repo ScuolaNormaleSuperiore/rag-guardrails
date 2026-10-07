@@ -1,7 +1,11 @@
 """Run the rag-guardrails test suite.
 
-This is the single source of truth for test execution: the pre-commit hook, CI
-and manual runs all go through this file. See `DOC/TestingCode.md`.
+This is the single source of truth for test execution: CI and manual runs go
+through this file. See `DOC/TestingCode.md`.
+
+It lives in `.tests/`, not in the plugin root, because Cheshire Cat imports every
+`.py` it finds in the plugin folder except those in hidden folders. Run it from
+the plugin root as `python .tests/run-tests.py`; it works from any directory.
 """
 
 from __future__ import annotations
@@ -14,7 +18,7 @@ import sys
 from pathlib import Path
 
 
-REPO_ROOT = Path(__file__).resolve().parent
+REPO_ROOT = Path(__file__).resolve().parent.parent
 SERVICE = "cheshire-cat-core"
 PLUGIN_IN_CONTAINER = "/app/cat/plugins/rag-guardrails"
 
@@ -71,7 +75,7 @@ def run_local_unit_tests(detailed: bool) -> int:
             f"Install it once with:  {Path(sys.executable).name} -m pip install pytest",
             file=sys.stderr,
         )
-        print("Or use the suite in the container:  python run-tests.py", file=sys.stderr)
+        print("Or use the suite in the container:  python .tests/run-tests.py", file=sys.stderr)
         return 1
 
     result = subprocess.run(pytest_args(detailed, ".tests/unit"), cwd=REPO_ROOT)
@@ -130,7 +134,7 @@ def run_container_suite(detailed: bool, integration_only: bool = False) -> int:
     compose_cmd = detect_compose_command()
     if compose_cmd is None:
         print("Neither 'docker compose' nor 'docker-compose' is available.", file=sys.stderr)
-        print("Run only the unit tests instead:  python run-tests.py --unit", file=sys.stderr)
+        print("Run only the unit tests instead:  python .tests/run-tests.py --unit", file=sys.stderr)
         return 1
 
     container_id = running_container_id(compose_cmd, project_dir)
@@ -140,7 +144,7 @@ def run_container_suite(detailed: bool, integration_only: bool = False) -> int:
             f"Start it from {project_dir} with:  {' '.join(compose_cmd)} up -d",
             file=sys.stderr,
         )
-        print("Or run only the unit tests:  python run-tests.py --unit", file=sys.stderr)
+        print("Or run only the unit tests:  python .tests/run-tests.py --unit", file=sys.stderr)
         return 1
 
     if integration_only:

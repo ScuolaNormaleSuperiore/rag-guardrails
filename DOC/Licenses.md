@@ -29,7 +29,7 @@ distributed under licences that impose use restrictions, and GPLv3 section 10
 forbids adding restrictions to conveyed material — bundling them would create a
 genuine incompatibility where today there is none. This is a licensing boundary,
 not a size optimisation, and the same warning is repeated in
-`package-plugin.py`, above the file list.
+`.tools/package-plugin.py`, above the file list.
 
 ## Built with Llama (when enabled)
 

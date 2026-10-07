@@ -1,12 +1,12 @@
 """Tests for what the release package contains.
 
-The release zip is built from an explicit list in `package-plugin.py`. A runtime
+The release zip is built from an explicit list in `.tools/package-plugin.py`. A runtime
 module missing from that list produces a package that installs and then fails:
 the core imports every `.py` it finds in the plugin folder, so one absent module
 makes the whole plugin unloadable. Nothing in the build catches it, because the
 build only checks that the files it *does* list exist.
 
-These tests need no Cheshire Cat: `package-plugin.py` imports nothing from
+These tests need no Cheshire Cat: `.tools/package-plugin.py` imports nothing from
 `cat`, which is what keeps them in `.tests/unit`.
 """
 
@@ -19,19 +19,15 @@ from packaging.requirements import InvalidRequirement, Requirement
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# Scripts that run *around* the plugin rather than inside it. They are the only
-# top-level Python files that legitimately stay out of the release package.
-DEVELOPMENT_SCRIPTS = {"run-tests.py", "package-plugin.py"}
-
 
 def load_packaging_module():
-    """Import `package-plugin.py` by path.
+    """Import `.tools/package-plugin.py` by path.
 
     The hyphen in the filename makes it an invalid identifier, so a plain
     `import` cannot reach it. Loading by path also avoids putting the repository
     root on `sys.path` for a module that is only needed here.
     """
-    path = REPO_ROOT / "package-plugin.py"
+    path = REPO_ROOT / ".tools" / "package-plugin.py"
     spec = importlib.util.spec_from_file_location("package_plugin", path)
     if spec is None or spec.loader is None:  # pragma: no cover - defensive
         pytest.fail(f"cannot load {path}")
@@ -45,13 +41,11 @@ class TestReleasePackageContents:
     def test_every_runtime_module_is_shipped(self):
         # The invariant that turns a written convention into a failing test:
         # add a module to the plugin, and the suite fails until it is also added
-        # to INCLUDED_FILES.
+        # to INCLUDED_FILES. Every `.py` in the root is a runtime module: the
+        # development scripts live in hidden folders, which
+        # test_repository_layout.py keeps true.
         shipped = set(load_packaging_module().INCLUDED_FILES)
-        runtime_modules = {
-            path.name
-            for path in REPO_ROOT.glob("*.py")
-            if path.name not in DEVELOPMENT_SCRIPTS
-        }
+        runtime_modules = {path.name for path in REPO_ROOT.glob("*.py")}
 
         missing = runtime_modules - shipped
         assert not missing, (
@@ -115,6 +109,6 @@ class TestReleasePackageContents:
         private = {
             name
             for name in shipped
-            if name.startswith(("DEV/", "DOC/", ".tests/", "tests/", ".githooks/"))
+            if name.startswith(("DEV/", "DOC/", ".tests/", "tests/", ".tools/", ".githooks/"))
         }
         assert not private, f"development material in the package: {sorted(private)}"

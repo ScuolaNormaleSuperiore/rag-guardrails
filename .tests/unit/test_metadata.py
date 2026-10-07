@@ -90,7 +90,7 @@ class TestLlamaAttribution:
         # The same claim, checked against the packaging list rather than the prose.
         import importlib.util
 
-        path = REPO_ROOT / "package-plugin.py"
+        path = REPO_ROOT / ".tools" / "package-plugin.py"
         spec = importlib.util.spec_from_file_location("package_plugin_legal", path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
