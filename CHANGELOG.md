@@ -5,24 +5,27 @@ Notable changes to `RAG Guardrails`. The format follows
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.0.5] - 2026-10-09
+### Added
+- Test that runs a real warmed classifier pipeline.
+### Changed
+- The classifier warm-up no longer contacts the Hugging Face Hub.
+### Fixed
+- The classifier preload made both classifiers fail on every message. Update before enabling it.
+
 ## [1.0.4] - 2026-10-07
 ### Changed
-- The development commands are now `python .tests/run-tests.py` and
-  `python .tools/package-plugin.py`.
-- `test_importability.py` is replaced by `test_repository_layout.py`, which
-  fails on any file the Cat would import that no plugin code needs.
-- The pre-commit hook now blocks the commit when the unit-test folder is
-  missing, instead of reporting nothing to run.
+- Classifiers are skipped when another plugin has already answered.
+- Classifier input is limited to 512 tokens; the prompt-injection classifier takes up to 1.4 s per message instead of 5.6 s.
+- Tests moved to `.tests/` and development scripts to `.tools/`; the pre-commit hook fails when the test folder is missing.
+- README names both Meta models and states that omocodic fiscal codes are detected.
 ### Fixed
-- Cheshire Cat no longer imports the test suite on every activation. The tests
-  moved from `tests/` to the hidden `.tests/`, which the core's recursive
-  `glob` does not enter. Six test files put the plugin folder first on
-  `sys.path`, so inside the Cat process a bare `import settings` written by
-  another plugin could resolve to this plugin's `settings.py`.
-- The two development scripts are no longer imported either: the test runner
-  moved to `.tests/run-tests.py` and the packaging script to
-  `.tools/package-plugin.py`. The Cat now imports 6 files instead of 17, all of
-  them runtime modules.
+- A classifier error on one message is no longer reported as the classifier being unavailable.
+- An invalid `classifier_device` in `settings.json` no longer switches every guard off.
+- Cheshire Cat no longer imports the tests and development scripts.
+### Security
+- A message over 512 tokens could bypass the tone guard.
+- The classifier error log no longer includes the exception text.
 
 ## [1.0.3] - 2026-09-22
 - AI Code review
