@@ -266,6 +266,36 @@ usual behaviour and may download the model. A process warms each enabled-model
 and device configuration at most once, so core-driven plugin rediscovery does
 not repeat the local load.
 
+### Which models it loads
+
+Only the models of the classifier guards that are switched on: the
+prompt-injection model when its classifier is enabled, the offensive-input model
+when the tone guard is, one each, on the device chosen in the settings. A model
+selectable in the panel but not selected is never touched. The load is
+synchronous, inside the plugin activation, so a start-up or an admin request
+that activates the plugin waits for it.
+
+### How it loads, and why it does not use `pipeline(local_files_only=True)`
+
+`local_files_only` is not a parameter of `transformers.pipeline()`. Passed to it
+as a keyword it is kept as a preprocessing parameter and handed to the tokenizer
+on **every** call, which rejects it: `TypeError: … got an unexpected keyword
+argument 'local_files_only'`. The model still loads, so the warm-up logs success,
+and then both classifiers fail on every message. That is what happened in
+production on 2026-10-09, with `transformers 4.57.6` and `torch 2.14`.
+
+The warm-up therefore loads the tokenizer and the model itself, with
+`local_files_only=True`, and gives the two objects to `pipeline()`. This also
+makes «never downloads» true by construction: called with a model name,
+`pipeline()` makes a `config.json` lookup that does not receive the option, and
+the old code was seen requesting it from the Hub during a warm-up. A normal load
+is unchanged and still goes through the model name.
+
+`.tests/integration/test_real_pipeline.py` runs a real warmed pipeline on a tiny
+random model, with the same two calls the classifiers make and with every
+connection attempt recorded. It is the only test that does: every other one
+replaces the pipeline with a stand-in, which is how this shipped.
+
 ## Reset point
 
 Both caches live only for the lifetime of the plugin process. In addition, the

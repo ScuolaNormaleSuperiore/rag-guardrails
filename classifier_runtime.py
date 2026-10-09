@@ -216,6 +216,47 @@ def _classifier_load_lock(cache_key: str):
         return _CLASSIFIER_LOAD_LOCKS.setdefault(cache_key, threading.Lock())
 
 
+def _build_pipeline(
+    model_name: str, token: str | bool, offline_only: bool, pipeline_kwargs: dict
+):
+    """Build the `transformers` pipeline, from local files only when asked.
+
+    `local_files_only` is **not** a parameter of `transformers.pipeline()`, and
+    handing it over as a keyword is the defect this function exists to avoid.
+    The pipeline does not consume it: it keeps it as a preprocessing parameter
+    and passes it to the tokenizer on every call, which rejects it with
+    `TypeError: … got an unexpected keyword argument 'local_files_only'`. The
+    model still loads, so the warm-up reports success, and from then on every
+    message fails for both classifiers. Verified on 2026-10-09 against
+    `transformers 4.57.6` and `torch 2.14` with a real pipeline, and seen in the
+    production log the same day.
+
+    Routing it through `model_kwargs` would stop that error but still leave one
+    `config.json` lookup in `pipeline()` that does not receive the option, so the
+    «never downloads» promise of the warm-up would depend on the environment.
+    The offline case therefore loads the tokenizer and the model itself, with the
+    option, and gives the objects to `pipeline()`: nothing left in that call can
+    reach the Hub. A normal load is untouched.
+    """
+    from transformers import pipeline as transformers_pipeline
+
+    if not offline_only:
+        return transformers_pipeline(
+            "text-classification", model=model_name, token=token, **pipeline_kwargs
+        )
+
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+    load_options = {"local_files_only": True, "token": token}
+    tokenizer = AutoTokenizer.from_pretrained(model_name, **load_options)
+    model = AutoModelForSequenceClassification.from_pretrained(
+        model_name, **load_options
+    )
+    return transformers_pipeline(
+        "text-classification", model=model, tokenizer=tokenizer, **pipeline_kwargs
+    )
+
+
 def get_pipeline(
     model_name: str,
     token: str | bool = False,
@@ -230,10 +271,11 @@ def get_pipeline(
     the callers turn into fail-open behaviour: a classifier that cannot run must
     leave the message alone, never take the turn down.
 
-    `pipeline_kwargs` reaches `transformers.pipeline()`. The cache identity is
-    the model name and selected device; `local_files_only` controls only how a
-    model is acquired and deliberately does not create another cache entry.
-    Callers must not vary other pipeline-construction arguments for the same
+    `pipeline_kwargs` reaches `transformers.pipeline()`, except `local_files_only`,
+    which is taken out and decides how the model is acquired (see
+    `_build_pipeline`). The cache identity is the model name and selected device;
+    `local_files_only` deliberately does not create another cache entry. Callers
+    must not vary other pipeline-construction arguments for the same
     model-and-device pair.
     """
     device = pipeline_kwargs.get("device", -1)
@@ -287,9 +329,9 @@ def get_pipeline(
         if previous_error is not None:
             raise ClassifierUnavailable(previous_error)
 
-        from transformers import pipeline as transformers_pipeline
-
-        offline_only = pipeline_kwargs.get("local_files_only") is True
+        # Popped, not read: it must never reach `transformers.pipeline()` as a
+        # keyword. See `_build_pipeline`.
+        offline_only = pipeline_kwargs.pop("local_files_only", None) is True
         if offline_only:
             runtime_log.info(
                 "[rag-guardrails] warming classifier model "
@@ -302,11 +344,8 @@ def get_pipeline(
                 "cache when available and download missing files if needed"
             )
         try:
-            pipeline = transformers_pipeline(
-                "text-classification",
-                model=model_name,
-                token=token,
-                **pipeline_kwargs,
+            pipeline = _build_pipeline(
+                model_name, token, offline_only, pipeline_kwargs
             )
         except Exception as error:
             # Redacted before it is stored, not only before it is logged: the reason is

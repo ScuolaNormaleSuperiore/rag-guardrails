@@ -47,12 +47,36 @@ def reset_classifier_caches():
         runtime._CLASSIFIER_LOAD_LOCKS.clear()
 
 
-def fake_transformers(monkeypatch, pipeline_factory):
-    """Install a stand-in `transformers` module exposing `pipeline`."""
+def fake_transformers(monkeypatch, pipeline_factory, from_pretrained=None):
+    """Install a stand-in `transformers` module.
+
+    Exposes `pipeline`, and the two classes the offline warm-up loads itself.
+    `from_pretrained(kind, name, **options)` is called for each of them, with
+    `kind` either `"tokenizer"` or `"model"`; it returns a marker object unless
+    the test supplies its own.
+    """
+    def load(kind):
+        def from_pretrained_of(name, **options):
+            if from_pretrained is not None:
+                return from_pretrained(kind, name, **options)
+            return f"<{kind} of {name}>"
+
+        return staticmethod(from_pretrained_of)
+
     monkeypatch.setitem(
         sys.modules,
         "transformers",
-        type("M", (), {"pipeline": staticmethod(pipeline_factory)})(),
+        type(
+            "M",
+            (),
+            {
+                "pipeline": staticmethod(pipeline_factory),
+                "AutoTokenizer": type("T", (), {"from_pretrained": load("tokenizer")}),
+                "AutoModelForSequenceClassification": type(
+                    "C", (), {"from_pretrained": load("model")}
+                ),
+            },
+        )(),
     )
 
 
@@ -182,34 +206,115 @@ class TestPipelineCache:
         assert first is second
         assert calls == [{"device": 0}]
 
-    def test_warm_up_uses_local_files_only(self, monkeypatch):
-        captured = {}
+    def test_warm_up_loads_tokenizer_and_model_from_local_files_only(self, monkeypatch):
+        loads = []
         fake_transformers(
             monkeypatch,
-            lambda task, model, token=None, **kwargs: captured.update(kwargs) or object(),
+            lambda task, model, token=None, **kwargs: object(),
+            from_pretrained=lambda kind, name, **options: loads.append(
+                (kind, name, options)
+            )
+            or f"<{kind}>",
         )
 
+        assert runtime.warm_pipeline(A_MODEL, token="hf_secret") is True
+        assert loads == [
+            ("tokenizer", A_MODEL, {"local_files_only": True, "token": "hf_secret"}),
+            ("model", A_MODEL, {"local_files_only": True, "token": "hf_secret"}),
+        ]
+
+    def test_local_files_only_never_reaches_the_pipeline_as_a_keyword(
+        self, monkeypatch
+    ):
+        # Regression, and the whole point of the offline path. `pipeline()` has no
+        # such parameter: it keeps the keyword as a preprocessing parameter and
+        # hands it to the tokenizer on every call, which raises `TypeError`. The
+        # model still loads, so the warm-up looked successful while both
+        # classifiers failed on every message — seen in production on 2026-10-09.
+        # Only a real pipeline shows the failure itself, and
+        # `.tests/integration/test_real_pipeline.py` runs one; this pins the cause.
+        captured = {}
+
+        def pipeline(task, model, token=None, **kwargs):
+            captured.update(task=task, model=model, kwargs=kwargs)
+            return object()
+
+        fake_transformers(monkeypatch, pipeline)
+
         assert runtime.warm_pipeline(A_MODEL) is True
-        assert captured["local_files_only"] is True
+        assert "local_files_only" not in captured["kwargs"]
+        assert "model_kwargs" not in captured["kwargs"]
+
+    def test_the_warmed_pipeline_is_built_from_the_objects_already_loaded(
+        self, monkeypatch
+    ):
+        # Handing `pipeline()` the objects, not the name, is what leaves it nothing
+        # to look up on the Hub: with a name it makes a `config.json` call that
+        # does not receive the offline option.
+        captured = {}
+
+        def pipeline(task, model, token=None, tokenizer=None, **kwargs):
+            captured.update(model=model, tokenizer=tokenizer, token=token)
+            return object()
+
+        fake_transformers(monkeypatch, pipeline)
+
+        runtime.warm_pipeline(A_MODEL)
+
+        assert captured["model"] == f"<model of {A_MODEL}>"
+        assert captured["tokenizer"] == f"<tokenizer of {A_MODEL}>"
+        assert captured["token"] is None
+
+    def test_a_normal_load_still_passes_the_name_and_the_token(self, monkeypatch):
+        captured = {}
+
+        def pipeline(task, model, token=None, **kwargs):
+            captured.update(model=model, token=token, kwargs=kwargs)
+            return object()
+
+        fake_transformers(monkeypatch, pipeline)
+
+        runtime.get_pipeline(A_MODEL, token="hf_secret")
+
+        assert captured == {"model": A_MODEL, "token": "hf_secret", "kwargs": {}}
+
+    def test_the_warm_up_keeps_the_device_for_the_pipeline(self, monkeypatch):
+        captured = {}
+
+        def pipeline(task, model, token=None, **kwargs):
+            captured.update(kwargs)
+            return object()
+
+        fake_transformers(monkeypatch, pipeline)
+
+        runtime.warm_pipeline(A_MODEL, device=0)
+
+        assert captured["device"] == 0
+        assert set(captured) == {"device", "tokenizer"}
+        assert runtime.classifier_cache_key(A_MODEL, 0) in runtime._CLASSIFIER_PIPELINES
 
     def test_failed_warm_up_does_not_prevent_normal_later_load(self, monkeypatch):
         attempts = []
         infos, warnings = [], []
 
         def pipeline(task, model, token=None, **kwargs):
-            attempts.append(kwargs)
-            if kwargs.get("local_files_only"):
-                raise OSError("not cached")
+            attempts.append(model)
             return object()
 
-        fake_transformers(monkeypatch, pipeline)
+        def from_pretrained(kind, name, **options):
+            attempts.append(kind)
+            raise OSError("not cached")
+
+        fake_transformers(monkeypatch, pipeline, from_pretrained)
         monkeypatch.setattr(runtime.runtime_log, "info", infos.append)
         monkeypatch.setattr(runtime.runtime_log, "warning", warnings.append)
 
         assert runtime.warm_pipeline(A_MODEL) is False
         assert runtime.classifier_load_error(A_MODEL) is None
         assert runtime.get_pipeline(A_MODEL) is not None
-        assert len(attempts) == 2
+        # The tokenizer is where the offline load fails; the normal load then goes
+        # through `pipeline()` by name.
+        assert attempts == ["tokenizer", A_MODEL]
         assert any("locally cached files only" in line for line in infos)
         assert any("unavailable from the local cache" in line for line in warnings)
         assert not any("will not be retried" in line for line in warnings)
